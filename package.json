@@ -1,0 +1,14 @@
+{
+  "name": "local-zotero-bridge",
+  "version": "0.2.5",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --experimental-transform-types --test tests/*.test.ts",
+    "build": "node scripts/build.mjs",
+    "package": "npm run build && node scripts/package-xpi.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3"
+  }
+}
