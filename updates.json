@@ -4,8 +4,8 @@
       "updates": [
         {
           "version": "0.2.5",
-          "update_link": "https://github.com/mappedinfo/local-zotero-bridge/releases/download/v0.2.5/local-zotero-bridge-0.2.5.xpi",
-          "update_hash": "sha256:a0abdca42c3c0cc7df71b337e50c798f2cd7541975d10523da6c06cdf1f2c504",
+          "update_link": "https://github.com/Mappedinfo/local-zotero-bridge/releases/download/v0.2.5/local-zotero-bridge-0.2.5.xpi",
+          "update_hash": "sha256:09c3b2d10263432fca7772f343f8a4ec7530c2272243d7d18cfa26e02f456809",
           "applications": {
             "zotero": {
               "strict_min_version": "7.999",
