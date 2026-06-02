@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run package
+      - name: Update Zotero update manifest
+        env:
+          VERSION: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          export VERSION="${VERSION#v}"
+          XPI="release/local-zotero-bridge-${VERSION}.xpi"
+          export SHA="$(shasum -a 256 "$XPI" | awk '{print $1}')"
+          node -e '
+            const fs = require("fs");
+            const version = process.env.VERSION.replace(/^v/, "");
+            const sha = process.env.SHA;
+            const repository = process.env.REPOSITORY;
+            const data = JSON.parse(fs.readFileSync("updates.json", "utf8"));
+            data.addons["local-zotero-bridge@mappedinfo.com"].updates = [{
+              version,
+              update_link: `https://github.com/${repository}/releases/download/v${version}/local-zotero-bridge-${version}.xpi`,
+              update_hash: `sha256:${sha}`,
+              applications: {
+                zotero: {
+                  strict_min_version: "7.999",
+                  strict_max_version: "9.0.*"
+                }
+              }
+            }];
+            fs.writeFileSync("updates.json", `${JSON.stringify(data, null, 2)}\n`);
+          '
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- updates.json; then
+            git add updates.json
+            git commit -m "Update Zotero update manifest for v${VERSION}"
+            git push origin main
+          fi
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          gh release create "v${VERSION}" "release/local-zotero-bridge-${VERSION}.xpi" \
+            --title "v${VERSION}" \
+            --notes "Local Zotero Bridge v${VERSION}"
