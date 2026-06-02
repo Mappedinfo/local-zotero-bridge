@@ -62,6 +62,10 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
-          gh release create "v${VERSION}" "release/local-zotero-bridge-${VERSION}.xpi" \
-            --title "v${VERSION}" \
-            --notes "Local Zotero Bridge v${VERSION}"
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" "release/local-zotero-bridge-${VERSION}.xpi" --clobber
+          else
+            gh release create "v${VERSION}" "release/local-zotero-bridge-${VERSION}.xpi" \
+              --title "v${VERSION}" \
+              --notes "Local Zotero Bridge v${VERSION}"
+          fi
