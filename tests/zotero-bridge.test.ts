@@ -49,6 +49,50 @@ test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {
   ]);
 });
 
+test("Obsidian bridge helper searches the full Obsidian library index", () => {
+  const index = {
+    schemaVersion: 1,
+    entries: [
+      {
+        kind: "paper",
+        path: "Zotero/Papers/2024 - Smith - Scenario Paper.md",
+        title: "Scenario Paper",
+        citekey: "smithScenario2024",
+        year: "2024",
+        itemKey: "I1",
+        zoteroUri: "zotero://select/library/items/I1",
+        content: "Summary\nEvidence calibration appears in a hand-written note."
+      },
+      {
+        kind: "paper",
+        path: "Zotero/Papers/2023 - Chen - Other.md",
+        title: "Other Paper",
+        citekey: "chenOther2023",
+        year: "2023",
+        itemKey: "I2",
+        content: "响应预测 可以在中文笔记中被搜索。"
+      },
+      {
+        kind: "standalone-note",
+        path: "Zotero/Zotero原生独立笔记/Standalone.md",
+        title: "Standalone note",
+        noteKey: "N1",
+        content: "A loose thought about calibration."
+      }
+    ]
+  };
+
+  const ranked = obsidian.searchLibraryIndex(index, "scenario calibration");
+  assert.equal(ranked[0].itemKey, "I1");
+  assert.match(ranked[0].matches[0].text, /Evidence calibration/);
+
+  const chinese = obsidian.searchLibraryIndex(index, "响应预测");
+  assert.equal(chinese.length, 1);
+  assert.equal(chinese[0].itemKey, "I2");
+
+  assert.deepEqual(obsidian.searchLibraryIndex(index, "   "), []);
+});
+
 function fakeZotero() {
   const collections = [
     {

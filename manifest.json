@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Local Zotero Bridge",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Expose local Zotero collection, item, and native note metadata to Local Zotero Mirror.",
   "homepage_url": "https://github.com/mappedinfo/local-zotero-mirror",
   "author": "mappedinfo",
@@ -14,7 +14,7 @@
       "id": "local-zotero-bridge@mappedinfo.com",
       "update_url": "https://raw.githubusercontent.com/mappedinfo/local-zotero-bridge/main/updates.json",
       "strict_min_version": "7.999",
-      "strict_max_version": "9.0.*"
+      "strict_max_version": "10.999.999"
     }
   }
 }

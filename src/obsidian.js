@@ -5,6 +5,7 @@
     targetFolder: "知识库/Zotero同步资料",
     papersFolderName: "Papers",
     indexFileName: ".obsidian-zotero-index.json",
+    searchIndexFileName: ".obsidian-zotero-search-index.json",
     filenameTemplate: "{year} - {firstAuthor} - {title}"
   };
 
@@ -110,6 +111,52 @@
     return matches;
   }
 
+  function searchLibraryIndex(index, query, limit = 50) {
+    const tokens = tokenizeSearchQuery(query);
+    if (tokens.length === 0) return [];
+
+    const entries = Array.isArray(index?.entries) ? index.entries : [];
+    const results = [];
+
+    for (const entry of entries) {
+      const fields = {
+        title: normalizeSearchText(entry.title),
+        citekey: normalizeSearchText(entry.citekey),
+        year: normalizeSearchText(entry.year),
+        path: normalizeSearchText(entry.path),
+        content: normalizeSearchText(entry.content)
+      };
+      const haystack = [fields.title, fields.citekey, fields.year, fields.path, fields.content].join("\n");
+      if (!tokens.every((token) => haystack.includes(token))) continue;
+
+      const matches = searchMarkdownNoteTokens(entry.content || "", tokens, query, 3);
+      const score =
+        scoreField(fields.title, tokens, 100) +
+        scoreField(fields.citekey, tokens, 80) +
+        scoreField(fields.year, tokens, 25) +
+        scoreField(fields.path, tokens, 15) +
+        scoreField(fields.content, tokens, 5) +
+        Math.min(matches.length, 3);
+
+      results.push({
+        kind: entry.kind,
+        path: entry.path,
+        title: entry.title || entry.path || "Untitled",
+        citekey: entry.citekey,
+        year: entry.year,
+        itemKey: entry.itemKey,
+        noteKey: entry.noteKey,
+        zoteroUri: entry.zoteroUri,
+        matches,
+        score
+      });
+    }
+
+    return results
+      .sort((a, b) => b.score - a.score || String(a.title).localeCompare(String(b.title)))
+      .slice(0, normalizeLimit(limit));
+  }
+
   function renderFilenameTemplate(template, item) {
     const replacements = {
       year: item.year || "n.d.",
@@ -142,6 +189,52 @@
     return `${start > 0 ? "..." : ""}${text.slice(start, end)}${end < text.length ? "..." : ""}`;
   }
 
+  function searchMarkdownNoteTokens(markdown, tokens, query, limit = 8) {
+    if (!Array.isArray(tokens) || tokens.length === 0) return [];
+    const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+    const matches = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const normalizedLine = normalizeSearchText(line);
+      if (!tokens.some((token) => normalizedLine.includes(token))) continue;
+      matches.push({
+        line: index + 1,
+        text: makeSnippet(line, query)
+      });
+      if (matches.length >= limit) break;
+    }
+
+    return matches;
+  }
+
+  function tokenizeSearchQuery(query) {
+    const normalized = normalizeSearchText(query);
+    if (!normalized) return [];
+    const tokens = normalized.includes(" ") ? normalized.split(/\s+/g).filter(Boolean) : [normalized];
+    return [...new Set(tokens)];
+  }
+
+  function normalizeSearchText(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .toLocaleLowerCase()
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .trim();
+  }
+
+  function scoreField(value, tokens, weight) {
+    if (!value) return 0;
+    return tokens.reduce((score, token) => score + (value.includes(token) ? weight : 0), 0);
+  }
+
+  function normalizeLimit(limit) {
+    const parsed = Number(limit);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.min(Math.floor(parsed), 200) : 50;
+  }
+
   function resolveConfig(config) {
     return {
       ...DEFAULT_OBSIDIAN_CONFIG,
@@ -158,6 +251,7 @@
     findIndexItem,
     normalizeVaultPath,
     sanitizePathSegment,
+    searchLibraryIndex,
     searchMarkdownNote
   };
 

@@ -2,13 +2,14 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.5";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.6";
 
 var ObsidianZoteroBridge = {
   endpoints: [
     "/obsidian-zotero/status",
     "/obsidian-zotero/snapshot",
-    "/obsidian-zotero/search-obsidian-note"
+    "/obsidian-zotero/search-obsidian-note",
+    "/obsidian-zotero/search-obsidian-library"
   ],
   menuIDs: [],
   localeInserted: false,
@@ -20,6 +21,14 @@ var ObsidianZoteroBridge = {
   fallbackMenuInstalled: false,
   fallbackMenuError: null,
   fallbackMenuShowingListener: null,
+  searchUiInstalled: false,
+  searchUiError: null,
+  searchButton: null,
+  searchPanel: null,
+  searchInput: null,
+  searchResultsEl: null,
+  searchStatusEl: null,
+  searchDebounceTimer: null,
   activeMenuCommand: null,
   lastMenuCommand: null,
   config: {
@@ -28,6 +37,7 @@ var ObsidianZoteroBridge = {
     targetFolder: "知识库/Zotero同步资料",
     papersFolderName: "Papers",
     indexFileName: ".obsidian-zotero-index.json",
+    searchIndexFileName: ".obsidian-zotero-search-index.json",
     filenameTemplate: "{year} - {firstAuthor} - {title}"
   },
 
@@ -50,6 +60,10 @@ var ObsidianZoteroBridge = {
         activeCommand: this.activeMenuCommand,
         lastCommand: this.lastMenuCommand
       },
+      searchUi: {
+        installed: this.searchUiInstalled,
+        error: this.searchUiError
+      },
       generatedAt: new Date().toISOString()
     }));
     this.registerEndpoint("/obsidian-zotero/snapshot", async (request) => {
@@ -63,6 +77,11 @@ var ObsidianZoteroBridge = {
       const query = getQueryParam(request, "q") || "";
       return this.searchObsidianNote(itemKey, query);
     });
+    this.registerEndpoint("/obsidian-zotero/search-obsidian-library", async (request) => {
+      const query = getQueryParam(request, "q") || "";
+      const limit = getQueryParam(request, "limit") || "50";
+      return this.searchObsidianLibrary(query, limit);
+    });
     this.registerMenusWhenReady();
     Zotero.debug("[Local Zotero Bridge] Started");
   },
@@ -72,20 +91,17 @@ var ObsidianZoteroBridge = {
       delete Zotero.Server.Endpoints[endpoint];
     }
     this.unregisterMenus();
+    this.uninstallSearchUi();
     Zotero.debug("[Local Zotero Bridge] Stopped");
   },
 
   registerEndpoint(path, handler) {
     function Endpoint() {}
     Endpoint.prototype.supportedMethods = ["GET"];
-    Endpoint.prototype.init = async function init(data, sendResponseCallback) {
+    Endpoint.prototype.init = async function init(request) {
       try {
-        const payload = await handler(data);
+        const payload = await handler(request);
         const body = JSON.stringify(payload);
-        if (typeof sendResponseCallback === "function") {
-          sendResponseCallback(200, "application/json", body);
-          return undefined;
-        }
         return [200, "application/json", body];
       } catch (error) {
         Zotero.logError(error);
@@ -93,10 +109,6 @@ var ObsidianZoteroBridge = {
           ok: false,
           error: error && error.message ? error.message : String(error)
         });
-        if (typeof sendResponseCallback === "function") {
-          sendResponseCallback(500, "application/json", body);
-          return undefined;
-        }
         return [500, "application/json", body];
       }
     };
@@ -109,6 +121,7 @@ var ObsidianZoteroBridge = {
       .then(() => {
         this.insertLocale();
         this.installItemMenuFallback();
+        this.installSearchUi();
         this.registerMenus();
       })
       .catch((error) => Zotero.logError(error));
@@ -341,6 +354,376 @@ var ObsidianZoteroBridge = {
     }
   },
 
+  installSearchUi() {
+    const win = Zotero.getMainWindow?.();
+    const doc = win?.document;
+    if (!doc) {
+      this.searchUiInstalled = false;
+      this.searchUiError = "Cannot access Zotero main window document";
+      return;
+    }
+    if (this.searchUiInstalled) return;
+
+    try {
+      const anchor = this.findQuickSearchAnchor(doc);
+      const parent = anchor?.parentNode || this.findToolbarContainer(doc);
+      if (!parent) {
+        throw new Error("Cannot find Zotero toolbar container");
+      }
+
+      const button = doc.createElement("button");
+      button.id = "local-zotero-bridge-search-button";
+      button.type = "button";
+      button.textContent = "Obsidian";
+      button.setAttribute("title", "Search Obsidian notes");
+      setStyles(button, {
+        marginLeft: "6px",
+        padding: "4px 10px",
+        border: "1px solid var(--fill-quinary, #c8c8c8)",
+        borderRadius: "6px",
+        background: "var(--material-background, #fff)",
+        color: "var(--fill-primary, #222)",
+        font: "inherit",
+        cursor: "pointer"
+      });
+      button.addEventListener("click", () => this.toggleSearchPanel());
+
+      if (anchor?.nextSibling) {
+        parent.insertBefore(button, anchor.nextSibling);
+      } else {
+        parent.appendChild(button);
+      }
+
+      const panel = this.buildSearchPanel(doc);
+      (doc.body || doc.documentElement).appendChild(panel);
+      this.searchButton = button;
+      this.searchPanel = panel;
+      this.searchUiInstalled = true;
+      this.searchUiError = null;
+    } catch (error) {
+      this.searchUiInstalled = false;
+      this.searchUiError = error && error.message ? error.message : String(error);
+      Zotero.logError(error);
+    }
+  },
+
+  uninstallSearchUi() {
+    if (this.searchDebounceTimer) {
+      Zotero.getMainWindow?.()?.clearTimeout?.(this.searchDebounceTimer);
+      this.searchDebounceTimer = null;
+    }
+    try {
+      this.searchButton?.remove?.();
+      this.searchPanel?.remove?.();
+    } catch (error) {
+      Zotero.logError(error);
+    }
+    this.searchButton = null;
+    this.searchPanel = null;
+    this.searchInput = null;
+    this.searchResultsEl = null;
+    this.searchStatusEl = null;
+    this.searchUiInstalled = false;
+  },
+
+  findQuickSearchAnchor(doc) {
+    const selectors = [
+      "#zotero-tb-search",
+      "#zotero-toolbar-search",
+      "#quick-search",
+      "#search-box",
+      ".search-box",
+      "input[type='search']",
+      "input[placeholder*='标题']",
+      "input[placeholder*='Title']",
+      "search-textbox"
+    ];
+    for (const selector of selectors) {
+      try {
+        const element = doc.querySelector?.(selector);
+        if (element) return element;
+      } catch {
+        // Try the next selector.
+      }
+    }
+    return null;
+  },
+
+  findToolbarContainer(doc) {
+    return (
+      doc.getElementById?.("zotero-toolbar") ||
+      doc.getElementById?.("zotero-items-toolbar") ||
+      doc.querySelector?.("toolbar") ||
+      doc.body ||
+      doc.documentElement
+    );
+  },
+
+  buildSearchPanel(doc) {
+    const panel = doc.createElement("div");
+    panel.id = "local-zotero-bridge-search-panel";
+    panel.hidden = true;
+    setStyles(panel, {
+      position: "fixed",
+      top: "0",
+      right: "0",
+      bottom: "0",
+      width: "420px",
+      maxWidth: "45vw",
+      zIndex: "10000",
+      display: "flex",
+      flexDirection: "column",
+      boxSizing: "border-box",
+      background: "var(--material-background, #fff)",
+      color: "var(--fill-primary, #222)",
+      borderLeft: "1px solid var(--fill-quinary, #d0d0d0)",
+      boxShadow: "-8px 0 24px rgba(0, 0, 0, 0.18)",
+      font: "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
+    });
+
+    const header = doc.createElement("div");
+    setStyles(header, {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "10px 12px",
+      borderBottom: "1px solid var(--fill-quinary, #e0e0e0)"
+    });
+
+    const title = doc.createElement("strong");
+    title.textContent = "Obsidian 搜索";
+    setStyles(title, { flex: "1" });
+
+    const close = doc.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("title", "Close");
+    setStyles(close, {
+      border: "0",
+      background: "transparent",
+      fontSize: "20px",
+      lineHeight: "1",
+      cursor: "pointer",
+      color: "inherit"
+    });
+    close.addEventListener("click", () => this.hideSearchPanel());
+    header.append(title, close);
+
+    const controls = doc.createElement("div");
+    setStyles(controls, { padding: "12px", borderBottom: "1px solid var(--fill-quinary, #e0e0e0)" });
+
+    const input = doc.createElement("input");
+    input.type = "search";
+    input.placeholder = "搜索 Obsidian 笔记内容...";
+    setStyles(input, {
+      width: "100%",
+      boxSizing: "border-box",
+      padding: "7px 9px",
+      border: "1px solid var(--fill-quinary, #c8c8c8)",
+      borderRadius: "6px",
+      font: "inherit"
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.runSearchFromPanel();
+      }
+    });
+    input.addEventListener("input", () => this.scheduleSearchFromPanel());
+
+    const status = doc.createElement("div");
+    setStyles(status, {
+      marginTop: "8px",
+      minHeight: "18px",
+      color: "var(--fill-secondary, #666)",
+      fontSize: "12px"
+    });
+    status.textContent = "输入关键词搜索所有同步的 Markdown notes。";
+    controls.append(input, status);
+
+    const results = doc.createElement("div");
+    setStyles(results, {
+      flex: "1",
+      overflow: "auto",
+      padding: "8px 10px 14px"
+    });
+
+    panel.append(header, controls, results);
+    this.searchInput = input;
+    this.searchStatusEl = status;
+    this.searchResultsEl = results;
+    return panel;
+  },
+
+  toggleSearchPanel() {
+    if (!this.searchPanel) return;
+    if (this.searchPanel.hidden) {
+      this.showSearchPanel();
+    } else {
+      this.hideSearchPanel();
+    }
+  },
+
+  showSearchPanel() {
+    if (!this.searchPanel) return;
+    this.searchPanel.hidden = false;
+    this.searchInput?.focus?.();
+  },
+
+  hideSearchPanel() {
+    if (!this.searchPanel) return;
+    this.searchPanel.hidden = true;
+  },
+
+  scheduleSearchFromPanel() {
+    const win = Zotero.getMainWindow?.();
+    if (!win) return;
+    if (this.searchDebounceTimer) {
+      win.clearTimeout(this.searchDebounceTimer);
+    }
+    this.searchDebounceTimer = win.setTimeout(() => {
+      this.searchDebounceTimer = null;
+      const query = this.searchInput?.value?.trim() || "";
+      if (query.length >= 2) {
+        this.runSearchFromPanel();
+      } else {
+        this.clearSearchResults("输入至少两个字符开始搜索。");
+      }
+    }, 250);
+  },
+
+  async runSearchFromPanel() {
+    const query = this.searchInput?.value?.trim() || "";
+    if (!query) {
+      this.clearSearchResults("输入关键词搜索所有同步的 Markdown notes。");
+      return;
+    }
+
+    this.setSearchStatus("搜索中...");
+    try {
+      const result = await this.searchObsidianLibrary(query, 50);
+      this.renderSearchResults(result);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      this.clearSearchResults(message);
+      Zotero.logError(error);
+    }
+  },
+
+  clearSearchResults(message) {
+    clearElement(this.searchResultsEl);
+    this.setSearchStatus(message);
+  },
+
+  setSearchStatus(message) {
+    if (this.searchStatusEl) {
+      this.searchStatusEl.textContent = message;
+    }
+  },
+
+  renderSearchResults(result) {
+    const doc = this.searchResultsEl?.ownerDocument;
+    if (!doc || !this.searchResultsEl) return;
+    clearElement(this.searchResultsEl);
+
+    if (!result.ok) {
+      this.setSearchStatus(result.error || "搜索失败。");
+      return;
+    }
+    this.setSearchStatus(`${result.total} 个结果`);
+
+    if (!result.results.length) {
+      const empty = doc.createElement("div");
+      empty.textContent = "没有找到匹配的 Obsidian 笔记。";
+      setStyles(empty, { padding: "16px 4px", color: "var(--fill-secondary, #666)" });
+      this.searchResultsEl.appendChild(empty);
+      return;
+    }
+
+    for (const entry of result.results) {
+      this.searchResultsEl.appendChild(this.renderSearchResultItem(doc, entry));
+    }
+  },
+
+  renderSearchResultItem(doc, entry) {
+    const item = doc.createElement("div");
+    setStyles(item, {
+      borderBottom: "1px solid var(--fill-quinary, #e6e6e6)",
+      padding: "10px 2px",
+      cursor: "pointer"
+    });
+    item.addEventListener("click", () => this.openSearchResultInObsidian(entry));
+
+    const title = doc.createElement("div");
+    title.textContent = entry.title || entry.path || "Untitled";
+    setStyles(title, { fontWeight: "600", marginBottom: "3px" });
+
+    const meta = doc.createElement("div");
+    meta.textContent = [entry.citekey, entry.year, entry.kind].filter(Boolean).join(" · ");
+    setStyles(meta, { color: "var(--fill-secondary, #666)", fontSize: "12px", marginBottom: "4px" });
+
+    const path = doc.createElement("div");
+    path.textContent = entry.path || "";
+    setStyles(path, {
+      color: "var(--fill-secondary, #666)",
+      fontSize: "11px",
+      marginBottom: "6px",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    });
+
+    const snippets = doc.createElement("div");
+    const matches = Array.isArray(entry.matches) ? entry.matches.slice(0, 3) : [];
+    snippets.textContent = matches.length > 0 ? matches.map((match) => `L${match.line}: ${match.text}`).join("\n") : "";
+    setStyles(snippets, {
+      whiteSpace: "pre-wrap",
+      lineHeight: "1.35",
+      marginBottom: entry.itemKey || entry.zoteroUri ? "8px" : "0"
+    });
+
+    item.append(title, meta, path, snippets);
+
+    if (entry.itemKey || entry.zoteroUri) {
+      const actions = doc.createElement("div");
+      const openZotero = doc.createElement("button");
+      openZotero.type = "button";
+      openZotero.textContent = "Open Zotero item";
+      setStyles(openZotero, {
+        padding: "3px 8px",
+        border: "1px solid var(--fill-quinary, #c8c8c8)",
+        borderRadius: "5px",
+        background: "var(--material-background, #fff)",
+        cursor: "pointer",
+        font: "inherit",
+        fontSize: "12px"
+      });
+      openZotero.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.openSearchResultInZotero(entry);
+      });
+      actions.appendChild(openZotero);
+      item.appendChild(actions);
+    }
+
+    return item;
+  },
+
+  openSearchResultInObsidian(entry) {
+    if (!entry?.path) return;
+    this.launchURL(ObsidianZoteroBridgeObsidian.buildObsidianOpenUri(this.config, entry.path));
+  },
+
+  openSearchResultInZotero(entry) {
+    if (entry?.zoteroUri) {
+      this.launchURL(entry.zoteroUri);
+      return;
+    }
+    if (entry?.itemKey) {
+      this.launchURL(`zotero://select/library/items/${entry.itemKey}`);
+    }
+  },
+
   runMenuCommand(commandName, task) {
     if (this.activeMenuCommand) return;
     this.activeMenuCommand = commandName;
@@ -463,8 +846,44 @@ var ObsidianZoteroBridge = {
     };
   },
 
+  async searchObsidianLibrary(query, limit = 50) {
+    const normalizedQuery = String(query || "").trim();
+    if (!normalizedQuery) {
+      return { ok: true, query: normalizedQuery, total: 0, results: [] };
+    }
+
+    let index;
+    try {
+      index = await this.readObsidianSearchIndex();
+    } catch (error) {
+      return {
+        ok: false,
+        query: normalizedQuery,
+        total: 0,
+        results: [],
+        error: "Obsidian search index not found. Run Sync Zotero Library in Obsidian first."
+      };
+    }
+
+    const results = ObsidianZoteroBridgeObsidian.searchLibraryIndex(index, normalizedQuery, limit);
+    return {
+      ok: true,
+      query: normalizedQuery,
+      generatedAt: index.generatedAt,
+      schemaVersion: index.schemaVersion,
+      total: results.length,
+      results
+    };
+  },
+
   async readObsidianIndex() {
     const indexPath = joinFsPath(this.config.vaultPath, this.config.targetFolder, this.config.indexFileName);
+    const text = await readTextFile(indexPath);
+    return JSON.parse(text);
+  },
+
+  async readObsidianSearchIndex() {
+    const indexPath = joinFsPath(this.config.vaultPath, this.config.targetFolder, this.config.searchIndexFileName);
     const text = await readTextFile(indexPath);
     return JSON.parse(text);
   },
@@ -538,13 +957,31 @@ function shutdown() {
   ObsidianZoteroBridge.shutdown();
 }
 
+function setStyles(element, styles) {
+  if (!element?.style) return;
+  for (const [key, value] of Object.entries(styles)) {
+    element.style[key] = value;
+  }
+}
+
+function clearElement(element) {
+  if (!element) return;
+  while (element.firstChild) {
+    element.removeChild(element.firstChild);
+  }
+}
+
 function getQueryParam(request, key) {
   if (!request) return null;
   if (typeof request === "string") {
     return new URLSearchParams(request.replace(/^\?/, "")).get(key);
   }
   const query = request.query;
-  if (query instanceof URLSearchParams) {
+  const searchParams = request.searchParams;
+  if (searchParams && typeof searchParams.get === "function") {
+    return searchParams.get(key);
+  }
+  if (query && typeof query.get === "function") {
     return query.get(key);
   }
   if (query && typeof query === "object" && key in query) {
@@ -553,6 +990,14 @@ function getQueryParam(request, key) {
   }
   if (typeof query === "string") {
     return new URLSearchParams(query.replace(/^\?/, "")).get(key);
+  }
+  const data = request.data;
+  if (data && typeof data === "object" && key in data) {
+    const value = data[key];
+    return Array.isArray(value) ? value[0] : value;
+  }
+  if (typeof data === "string" && data.includes("=")) {
+    return new URLSearchParams(data.replace(/^\?/, "")).get(key);
   }
   const url = request.url || request.path || "";
   const queryString = typeof url === "string" && url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
