@@ -2,7 +2,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.8";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.9";
 
 var ObsidianZoteroBridge = {
   endpoints: [
@@ -64,7 +64,7 @@ var ObsidianZoteroBridge = {
       searchUi: {
         installed: this.searchUiInstalled,
         error: this.searchUiError,
-        bodyRendered: Boolean(this.searchInput)
+        bodyRendered: Boolean(this.searchInput?.isConnected)
       },
       generatedAt: new Date().toISOString()
     }));
@@ -365,6 +365,7 @@ var ObsidianZoteroBridge = {
     if (this.searchUiInstalled) return;
 
     try {
+      this.ensureSearchPanelElement();
       const icon = `${this.rootURI}content/icons/local-zotero-bridge.svg`;
       const registeredPaneID = Zotero.ItemPaneManager.registerSection({
         paneID: "obsidian-search",
@@ -378,10 +379,9 @@ var ObsidianZoteroBridge = {
           icon,
           orderable: true
         },
-        bodyXHTML:
-          '<html:div class="local-zotero-bridge-search-loading" style="padding: 10px 12px;">Loading Obsidian search...</html:div>',
+        bodyXHTML: "<local-zotero-bridge-search-panel />",
         onInit: ({ doc, body }) => {
-          this.renderSearchSection(doc, body);
+          this.bindSearchSection(doc, body);
         },
         onItemChange: ({ setEnabled, setSectionSummary }) => {
           setEnabled(true);
@@ -389,7 +389,7 @@ var ObsidianZoteroBridge = {
         },
         onRender: ({ doc, body, setSectionSummary }) => {
           try {
-            this.renderSearchSection(doc, body);
+            this.bindSearchSection(doc, body);
             setSectionSummary("Search synced Obsidian notes");
           } catch (error) {
             this.searchUiError = error && error.message ? error.message : String(error);
@@ -443,66 +443,91 @@ var ObsidianZoteroBridge = {
     this.searchUiInstalled = false;
   },
 
-  renderSearchSection(doc, body) {
-    const previousQuery = this.searchInput?.value || "";
-    clearElement(body);
-    this.searchSectionBody = body;
-    setStyles(body, {
-      display: "flex",
-      flexDirection: "column",
-      boxSizing: "border-box",
-      minHeight: "260px",
-      padding: "8px 12px 12px",
-      color: "var(--fill-primary, #222)",
-      font: "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
-    });
+  ensureSearchPanelElement() {
+    const win = Zotero.getMainWindow?.();
+    const registry = win?.customElements || globalThis.customElements;
+    const Base = win?.XULElementBase || globalThis.XULElementBase;
+    const mozXULElement = win?.MozXULElement || globalThis.MozXULElement;
+    if (!registry?.define || !Base || !mozXULElement?.parseXULToFragment) {
+      throw new Error("Zotero custom element APIs are unavailable");
+    }
+    if (registry.get?.("local-zotero-bridge-search-panel")) return;
 
-    const controls = createHTML(doc, "div");
-    setStyles(controls, { padding: "8px 0 10px", borderBottom: "1px solid var(--fill-quinary, #e0e0e0)" });
-
-    const input = createHTML(doc, "input");
-    input.type = "search";
-    input.placeholder = "搜索 Obsidian 笔记内容...";
-    input.value = previousQuery;
-    setStyles(input, {
-      width: "100%",
-      boxSizing: "border-box",
-      padding: "7px 9px",
-      border: "1px solid var(--fill-quinary, #c8c8c8)",
-      borderRadius: "6px",
-      background: "var(--material-background, #fff)",
-      color: "inherit",
-      font: "inherit",
-      minHeight: "30px"
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        this.runSearchFromPanel();
+    const bodyXHTML = this.searchPanelBodyXHTML();
+    class LocalZoteroBridgeSearchPanel extends Base {
+      get content() {
+        return mozXULElement.parseXULToFragment(bodyXHTML);
       }
-    });
-    input.addEventListener("input", () => this.scheduleSearchFromPanel());
+    }
+    registry.define("local-zotero-bridge-search-panel", LocalZoteroBridgeSearchPanel);
+  },
 
-    const status = createHTML(doc, "div");
-    setStyles(status, {
-      marginTop: "8px",
-      minHeight: "18px",
-      color: "var(--fill-secondary, #666)",
-      fontSize: "12px"
-    });
-    status.textContent = "输入关键词搜索所有同步的 Markdown notes。";
-    controls.appendChild(input);
-    controls.appendChild(status);
+  searchPanelBodyXHTML() {
+    return `
+      <html:div
+        class="local-zotero-bridge-search-root"
+        style="display: flex; flex-direction: column; box-sizing: border-box; min-height: 260px; padding: 8px 12px 12px; color: var(--fill-primary, #222); font: 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif;"
+      >
+        <hbox
+          id="local-zotero-bridge-search-controls"
+          align="center"
+          style="padding: 8px 0 10px; border-bottom: 1px solid var(--fill-quinary, #e0e0e0);"
+        >
+          <editable-text
+            id="local-zotero-bridge-search-input"
+            multiline="false"
+            placeholder="搜索 Obsidian 笔记内容..."
+            style="flex: 1; min-height: 30px; margin-inline-end: 6px;"
+          />
+          <button
+            id="local-zotero-bridge-search-run"
+            label="搜索"
+            style="min-height: 30px;"
+          />
+        </hbox>
+        <html:div
+          id="local-zotero-bridge-search-status"
+          style="margin-top: 8px; min-height: 18px; color: var(--fill-secondary, #666); font-size: 12px;"
+        >输入关键词搜索所有同步的 Markdown notes。</html:div>
+        <html:div
+          id="local-zotero-bridge-search-results"
+          style="flex: 1; overflow: auto; padding: 8px 0 4px;"
+        ></html:div>
+      </html:div>
+    `;
+  },
 
-    const results = createHTML(doc, "div");
-    setStyles(results, {
-      flex: "1",
-      overflow: "auto",
-      padding: "8px 0 4px"
-    });
+  bindSearchSection(doc, body) {
+    const previousQuery = this.searchInput?.value || "";
+    const panel = body.querySelector("local-zotero-bridge-search-panel") || body;
+    const input = panel.querySelector("#local-zotero-bridge-search-input");
+    const runButton = panel.querySelector("#local-zotero-bridge-search-run");
+    const status = panel.querySelector("#local-zotero-bridge-search-status");
+    const results = panel.querySelector("#local-zotero-bridge-search-results");
+    if (!input || !status || !results) {
+      throw new Error("Obsidian search section bodyXHTML was not parsed");
+    }
 
-    body.appendChild(controls);
-    body.appendChild(results);
+    this.searchSectionBody = body;
+    if (previousQuery && !input.value) input.value = previousQuery;
+    if (!status.textContent) status.textContent = "输入关键词搜索所有同步的 Markdown notes。";
+
+    if (input.getAttribute("data-local-zotero-bridge-bound") !== "true") {
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          this.runSearchFromPanel();
+        }
+      });
+      input.addEventListener("input", () => this.scheduleSearchFromPanel());
+      input.setAttribute("data-local-zotero-bridge-bound", "true");
+    }
+
+    if (runButton && runButton.getAttribute("data-local-zotero-bridge-bound") !== "true") {
+      runButton.addEventListener("command", () => this.runSearchFromPanel());
+      runButton.setAttribute("data-local-zotero-bridge-bound", "true");
+    }
+
     this.searchInput = input;
     this.searchStatusEl = status;
     this.searchResultsEl = results;
