@@ -2,7 +2,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.10";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.11";
 
 var ObsidianZoteroBridge = {
   endpoints: [
@@ -111,14 +111,10 @@ var ObsidianZoteroBridge = {
     function Endpoint() {}
     Endpoint.prototype.supportedMethods = ["GET", "POST"];
     Endpoint.prototype.supportedDataTypes = ["application/json", "application/x-www-form-urlencoded", "text/plain"];
-    Endpoint.prototype.init = async function init(data, sendResponseCallback) {
+    Endpoint.prototype.init = async function init(request) {
       try {
-        const payload = await handler(data);
+        const payload = await handler(request);
         const body = JSON.stringify(payload);
-        if (typeof sendResponseCallback === "function") {
-          sendResponseCallback(200, "application/json", body);
-          return undefined;
-        }
         return [200, "application/json", body];
       } catch (error) {
         Zotero.logError(error);
@@ -126,10 +122,6 @@ var ObsidianZoteroBridge = {
           ok: false,
           error: error && error.message ? error.message : String(error)
         });
-        if (typeof sendResponseCallback === "function") {
-          sendResponseCallback(500, "application/json", body);
-          return undefined;
-        }
         return [500, "application/json", body];
       }
     };
