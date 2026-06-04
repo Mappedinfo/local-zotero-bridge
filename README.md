@@ -10,6 +10,7 @@ The plugin also adds Zotero context-menu actions and an `Obsidian Search` sectio
 
 - `http://127.0.0.1:23119/obsidian-zotero/status`
 - `http://127.0.0.1:23119/obsidian-zotero/snapshot`
+- `http://127.0.0.1:23119/obsidian-zotero/citations`
 - `http://127.0.0.1:23119/obsidian-zotero/search-obsidian-note`
 - `http://127.0.0.1:23119/obsidian-zotero/search-obsidian-library`
 
@@ -24,4 +25,4 @@ npm run package
 
 ## Distribution
 
-Attach `release/local-zotero-bridge-0.2.9.xpi` to the GitHub release `v0.2.9`, then keep `updates.json` on the default branch so Zotero can check for updates.
+Attach `release/local-zotero-bridge-0.2.10.xpi` to the GitHub release `v0.2.10`, then keep `updates.json` on the default branch so Zotero can check for updates.

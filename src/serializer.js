@@ -1,5 +1,5 @@
 (function attachSerializer(root) {
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
 
   function creatorName(creator) {
     if (!creator) return "";
@@ -143,11 +143,13 @@
   async function serializeItem(Zotero, item) {
     const library = getLibrary(Zotero, item.libraryID);
     const attachments = await getAttachments(Zotero, item, library);
+    const citekey = getCitationKey(item) || item.key;
 
     return {
       key: item.key,
       library,
-      citekey: getCitationKey(item),
+      citekey,
+      citation: await buildItemCitationData(Zotero, item, { citekey }),
       title: getField(item, "title") || "Untitled",
       creators: getCreators(item),
       year: getYear(item),
@@ -190,6 +192,249 @@
       if (match) return match[1];
     }
     return item.citationKey || item.citekey || undefined;
+  }
+
+  async function buildItemCitationData(Zotero, item, options = {}) {
+    const citekey = options.citekey || getCitationKey(item) || item.key;
+    const style = options.style || "apa";
+    const quickCitation = await getQuickCopyText(Zotero, [item], style, true);
+    const quickReference = await getQuickCopyText(Zotero, [item], style, false);
+
+    return {
+      citekey,
+      apaInText: quickCitation || fallbackParentheticalCitation([item]),
+      apaReference: quickReference || fallbackReference(item),
+      bibtex: buildBibtex(item, citekey)
+    };
+  }
+
+  async function buildCitationResponse(Zotero, options = {}) {
+    const style = options.style || "apa";
+    const scope = options.scope || "all";
+    const groups = parseCitationGroups(options.groups || "");
+    const libraryIDs = await getLibraries(Zotero, scope);
+    const items = [];
+
+    for (const libraryID of libraryIDs) {
+      items.push(...(await getItemsForLibrary(Zotero, libraryID)));
+    }
+
+    const itemsByCitekey = new Map();
+    for (const item of items) {
+      const citekey = getCitationKey(item) || item.key;
+      if (citekey && !itemsByCitekey.has(citekey)) {
+        itemsByCitekey.set(citekey, item);
+      }
+      if (item.key && !itemsByCitekey.has(item.key)) {
+        itemsByCitekey.set(item.key, item);
+      }
+    }
+
+    const allRequested = unique(groups.flat());
+    const metadataByCitekey = new Map();
+    const missingCitekeys = [];
+
+    for (const citekey of allRequested) {
+      const item = itemsByCitekey.get(citekey);
+      if (!item) {
+        missingCitekeys.push(citekey);
+        continue;
+      }
+      const itemCitekey = getCitationKey(item) || item.key;
+      const citation = await buildItemCitationData(Zotero, item, { citekey: itemCitekey, style });
+      metadataByCitekey.set(citekey, {
+        itemKey: item.key,
+        citekey: itemCitekey,
+        title: getField(item, "title") || "Untitled",
+        citation
+      });
+    }
+
+    const groupResults = [];
+    for (const citekeys of groups) {
+      const groupItems = citekeys.map((citekey) => itemsByCitekey.get(citekey)).filter(Boolean);
+      const missing = citekeys.filter((citekey) => !itemsByCitekey.has(citekey));
+      const rendered =
+        groupItems.length > 0
+          ? withMissingSuffix(
+              (await getQuickCopyText(Zotero, groupItems, style, true)) || fallbackParentheticalCitation(groupItems),
+              missing
+            )
+          : fallbackMissingCitation(citekeys);
+      groupResults.push({
+        citekeys,
+        rendered,
+        missing,
+        items: citekeys.map((citekey) => metadataByCitekey.get(citekey)).filter(Boolean)
+      });
+    }
+
+    const entries = allRequested.map((citekey) => metadataByCitekey.get(citekey)).filter(Boolean);
+    const bibliographyItems = entries.map((entry) => itemsByCitekey.get(entry.citekey) || itemsByCitekey.get(entry.itemKey)).filter(Boolean);
+    const quickBibliography = bibliographyItems.length > 0 ? await getQuickCopyText(Zotero, bibliographyItems, style, false) : "";
+    const bibliography = quickBibliography
+      ? splitBibliographyText(quickBibliography)
+      : entries.map((entry) => entry.citation.apaReference).filter(Boolean);
+
+    return {
+      ok: true,
+      schemaVersion: 1,
+      style,
+      generatedAt: new Date().toISOString(),
+      groups: groupResults,
+      bibliography,
+      entries,
+      missingCitekeys,
+      source: "zotero"
+    };
+  }
+
+  function parseCitationGroups(groups) {
+    return String(groups || "")
+      .split("|")
+      .map((group) =>
+        unique(
+          group
+            .split(",")
+            .map((citekey) => citekey.trim())
+            .filter(Boolean)
+        )
+      )
+      .filter((group) => group.length > 0);
+  }
+
+  async function getQuickCopyText(Zotero, items, style, asCitation) {
+    if (!Zotero?.QuickCopy?.getContentFromItems || items.length === 0) return "";
+    try {
+      const content = await Zotero.QuickCopy.getContentFromItems(items, quickCopyFormat(style), null, asCitation);
+      return normalizeQuickCopyContent(content);
+    } catch (error) {
+      try {
+        Zotero.logError?.(error);
+      } catch {
+        // Logging is best-effort inside fake Zotero test environments.
+      }
+      return "";
+    }
+  }
+
+  function quickCopyFormat(style) {
+    const styleID = style === "apa" ? "http://www.zotero.org/styles/apa" : style;
+    return `bibliography=${styleID}`;
+  }
+
+  function normalizeQuickCopyContent(content) {
+    if (!content) return "";
+    if (typeof content === "string") return cleanWhitespace(content);
+    if (typeof content.text === "string" && content.text.trim()) return cleanWhitespace(content.text);
+    if (typeof content.html === "string" && content.html.trim()) return cleanWhitespace(plainTextFromHtml(content.html));
+    return "";
+  }
+
+  function fallbackParentheticalCitation(items) {
+    const rendered = items.map((item) => `${creatorLabel(item)}, ${getYear(item) || "n.d."}`).join("; ");
+    return `(${rendered || "missing citation"})`;
+  }
+
+  function fallbackMissingCitation(citekeys) {
+    return `[missing: ${citekeys.join(", ")}]`;
+  }
+
+  function withMissingSuffix(rendered, missing) {
+    if (!missing.length) return rendered;
+    return `${rendered} [missing: ${missing.join(", ")}]`;
+  }
+
+  function fallbackReference(item) {
+    const creators = getCreators(item).filter((creator) => creator.creatorType === "author" || !creator.creatorType);
+    const authorText = creators.length > 0 ? creators.map(formatApaAuthor).join(", ") : creatorLabel(item);
+    const year = getYear(item) || "n.d.";
+    const title = getField(item, "title") || "Untitled";
+    const publication = getField(item, "publicationTitle") || getField(item, "proceedingsTitle");
+    const doi = getField(item, "DOI") || getField(item, "doi");
+    const url = getField(item, "url");
+    const source = doi ? `https://doi.org/${doi}` : url;
+    return [authorText ? `${authorText} (${year}).` : `(${year}).`, `${title}.`, publication ? `${publication}.` : "", source || ""]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function formatApaAuthor(creator) {
+    const initials = String(creator.firstName || "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((part) => `${part[0].toUpperCase()}.`)
+      .join(" ");
+    const formatted = [creator.lastName, initials].filter(Boolean).join(", ");
+    return formatted || creator.name || "Unknown";
+  }
+
+  function creatorLabel(item) {
+    const creators = getCreators(item).filter((creator) => creator.creatorType === "author" || !creator.creatorType);
+    if (creators.length === 0) return titleLabel(item);
+    if (creators.length === 1) return creatorLastName(creators[0]);
+    if (creators.length === 2) return `${creatorLastName(creators[0])} & ${creatorLastName(creators[1])}`;
+    return `${creatorLastName(creators[0])} et al.`;
+  }
+
+  function creatorLastName(creator) {
+    return creator.lastName || creator.name || creatorName(creator) || "Unknown";
+  }
+
+  function titleLabel(item) {
+    const title = getField(item, "title") || "Untitled";
+    return title.length > 60 ? `${title.slice(0, 57)}...` : title;
+  }
+
+  function buildBibtex(item, citekey) {
+    const fields = {
+      title: getField(item, "title"),
+      author: getCreators(item)
+        .filter((creator) => creator.creatorType === "author" || !creator.creatorType)
+        .map((creator) => creator.name || [creator.firstName, creator.lastName].filter(Boolean).join(" "))
+        .filter(Boolean)
+        .join(" and "),
+      year: getYear(item),
+      journal: getField(item, "publicationTitle"),
+      booktitle: getField(item, "proceedingsTitle"),
+      doi: getField(item, "DOI") || getField(item, "doi"),
+      url: getField(item, "url")
+    };
+    const type = bibtexType(getItemType(item));
+    const body = Object.entries(fields)
+      .filter(([, value]) => value)
+      .map(([key, value]) => `  ${key} = {${escapeBibtex(String(value))}}`)
+      .join(",\n");
+    return `@${type}{${citekey}${body ? `,\n${body}\n` : "\n"}}`;
+  }
+
+  function bibtexType(itemType) {
+    if (itemType === "conferencePaper") return "inproceedings";
+    if (itemType === "book") return "book";
+    if (itemType === "thesis") return "phdthesis";
+    if (itemType === "report") return "techreport";
+    return "article";
+  }
+
+  function escapeBibtex(value) {
+    return value.replace(/[{}]/g, "");
+  }
+
+  function splitBibliographyText(text) {
+    return String(text || "")
+      .split(/\n{2,}|\r?\n(?=\S)/)
+      .map((entry) => cleanWhitespace(entry))
+      .filter(Boolean);
+  }
+
+  function cleanWhitespace(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function unique(values) {
+    return [...new Set(values)];
   }
 
   async function getLibraries(Zotero, scope) {
@@ -332,6 +577,8 @@
   }
 
   const api = {
+    buildCitationResponse,
+    buildItemCitationData,
     buildSnapshot,
     serializeAttachment,
     serializeCollection,

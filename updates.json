@@ -3,9 +3,9 @@
     "local-zotero-bridge@mappedinfo.com": {
       "updates": [
         {
-          "version": "0.2.9",
-          "update_link": "https://github.com/Mappedinfo/local-zotero-bridge/releases/download/v0.2.9/local-zotero-bridge-0.2.9.xpi",
-          "update_hash": "sha256:67208a28e94a5569e68976794770d5fd337a9872bc00a69945ce0db534874aeb",
+          "version": "0.2.10",
+          "update_link": "https://github.com/Mappedinfo/local-zotero-bridge/releases/download/v0.2.10/local-zotero-bridge-0.2.10.xpi",
+          "update_hash": "sha256:e7f7e39c6cc6b460e7157223c52e908254264a4e6d63c68793d8c76f4f16abc9",
           "applications": {
             "zotero": {
               "strict_min_version": "7.999",

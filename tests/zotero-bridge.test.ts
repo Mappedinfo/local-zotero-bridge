@@ -10,17 +10,38 @@ test("Zotero bridge serializer builds collection and item snapshot", async () =>
   const Zotero = fakeZotero();
   const snapshot = await serializer.buildSnapshot(Zotero, { scope: "user" });
 
-  assert.equal(snapshot.schemaVersion, 2);
+  assert.equal(snapshot.schemaVersion, 3);
   assert.equal(snapshot.collections.length, 2);
   assert.deepEqual(snapshot.collections[1].path, ["Planning", "Scenario Assessment"]);
   assert.equal(snapshot.items.length, 1);
   assert.equal(snapshot.items[0].citekey, "smithScenario2024");
+  assert.equal(snapshot.items[0].citation.citekey, "smithScenario2024");
+  assert.equal(snapshot.items[0].citation.apaInText, "(Smith, 2024)");
+  assert.match(snapshot.items[0].citation.apaReference, /Smith, A\. \(2024\)\. Scenario Paper\./);
+  assert.match(snapshot.items[0].citation.bibtex, /@article\{smithScenario2024/);
   assert.equal(snapshot.items[0].attachments[0].mimeType, "application/pdf");
   assert.equal(snapshot.items[0].zoteroUri, "zotero://select/library/items/I1");
   assert.equal(snapshot.nativeNotes.length, 2);
   assert.equal(snapshot.nativeNotes[0].parentItemKey, "I1");
   assert.equal(snapshot.nativeNotes[0].noteHtml, "<p>Child note</p>");
   assert.equal(snapshot.nativeNotes[1].parentItemKey, undefined);
+});
+
+test("Zotero bridge serializer builds citation response by citekey groups", async () => {
+  const Zotero = fakeZotero();
+  const response = await serializer.buildCitationResponse(Zotero, {
+    scope: "user",
+    style: "apa",
+    groups: "smithScenario2024|missingKey"
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.groups[0].rendered, "(Smith, 2024)");
+  assert.deepEqual(response.groups[0].items.map((item) => item.citekey), ["smithScenario2024"]);
+  assert.equal(response.groups[1].rendered, "[missing: missingKey]");
+  assert.deepEqual(response.missingCitekeys, ["missingKey"]);
+  assert.match(response.bibliography[0], /Smith, A\. \(2024\)\. Scenario Paper\./);
+  assert.match(response.entries[0].citation.bibtex, /@article\{smithScenario2024/);
 });
 
 test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {

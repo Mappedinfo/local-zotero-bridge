@@ -2,12 +2,13 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.9";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.10";
 
 var ObsidianZoteroBridge = {
   endpoints: [
     "/obsidian-zotero/status",
     "/obsidian-zotero/snapshot",
+    "/obsidian-zotero/citations",
     "/obsidian-zotero/search-obsidian-note",
     "/obsidian-zotero/search-obsidian-library"
   ],
@@ -50,7 +51,7 @@ var ObsidianZoteroBridge = {
       plugin: "Local Zotero Bridge",
       version: LOCAL_ZOTERO_BRIDGE_VERSION,
       zoteroVersion: Zotero.version,
-      schemaVersion: 2,
+      schemaVersion: 3,
       menu: {
         managerAvailable: Boolean(Zotero.MenuManager?.registerMenu),
         localeInserted: this.localeInserted,
@@ -73,6 +74,15 @@ var ObsidianZoteroBridge = {
         scope: getQueryParam(request, "scope") || "all"
       };
       return ObsidianZoteroBridgeSerializer.buildSnapshot(Zotero, options);
+    });
+    this.registerEndpoint("/obsidian-zotero/citations", async (request) => {
+      const body = parseRequestBody(request);
+      const options = {
+        style: requestValue(request, body, "style") || "apa",
+        groups: requestValue(request, body, "groups") || "",
+        scope: requestValue(request, body, "scope") || "all"
+      };
+      return ObsidianZoteroBridgeSerializer.buildCitationResponse(Zotero, options);
     });
     this.registerEndpoint("/obsidian-zotero/search-obsidian-note", async (request) => {
       const itemKey = getQueryParam(request, "itemKey");
@@ -99,11 +109,16 @@ var ObsidianZoteroBridge = {
 
   registerEndpoint(path, handler) {
     function Endpoint() {}
-    Endpoint.prototype.supportedMethods = ["GET"];
-    Endpoint.prototype.init = async function init(request) {
+    Endpoint.prototype.supportedMethods = ["GET", "POST"];
+    Endpoint.prototype.supportedDataTypes = ["application/json", "application/x-www-form-urlencoded", "text/plain"];
+    Endpoint.prototype.init = async function init(data, sendResponseCallback) {
       try {
-        const payload = await handler(request);
+        const payload = await handler(data);
         const body = JSON.stringify(payload);
+        if (typeof sendResponseCallback === "function") {
+          sendResponseCallback(200, "application/json", body);
+          return undefined;
+        }
         return [200, "application/json", body];
       } catch (error) {
         Zotero.logError(error);
@@ -111,6 +126,10 @@ var ObsidianZoteroBridge = {
           ok: false,
           error: error && error.message ? error.message : String(error)
         });
+        if (typeof sendResponseCallback === "function") {
+          sendResponseCallback(500, "application/json", body);
+          return undefined;
+        }
         return [500, "application/json", body];
       }
     };
@@ -937,36 +956,62 @@ function createHTML(doc, tagName) {
 }
 
 function getQueryParam(request, key) {
-  if (!request) return null;
-  if (typeof request === "string") {
-    return new URLSearchParams(request.replace(/^\?/, "")).get(key);
+  const value = queryParamFromSource(request, key);
+  return value === undefined ? null : value;
+}
+
+function requestValue(request, body, key) {
+  if (body && typeof body === "object" && key in body) {
+    const value = body[key];
+    return Array.isArray(value) ? value[0] : value;
   }
-  const query = request.query;
-  const searchParams = request.searchParams;
-  if (searchParams && typeof searchParams.get === "function") {
-    return searchParams.get(key);
+  return getQueryParam(request, key);
+}
+
+function parseRequestBody(request) {
+  const data = request?.data ?? request?.body;
+  if (!data) return {};
+  if (typeof data === "object") return data;
+  if (typeof data !== "string") return {};
+  const trimmed = data.trim();
+  if (!trimmed) return {};
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const params = new URLSearchParams(trimmed.replace(/^\?/, ""));
+    return Object.fromEntries(params.entries());
   }
-  if (query && typeof query.get === "function") {
-    return query.get(key);
-  }
+}
+
+function queryParamFromSource(source, key) {
+  if (!source) return undefined;
+  if (typeof source === "string") return queryParamFromString(source, key);
+  const query = source.query;
+  const searchParams = source.searchParams;
+  if (searchParams && typeof searchParams.get === "function") return searchParams.get(key) ?? undefined;
+  if (query && typeof query.get === "function") return query.get(key) ?? undefined;
   if (query && typeof query === "object" && key in query) {
     const value = query[key];
     return Array.isArray(value) ? value[0] : value;
   }
-  if (typeof query === "string") {
-    return new URLSearchParams(query.replace(/^\?/, "")).get(key);
-  }
-  const data = request.data;
+  const fromQuery = queryParamFromString(query, key);
+  if (fromQuery !== undefined) return fromQuery;
+  const data = source.data ?? source.body;
   if (data && typeof data === "object" && key in data) {
     const value = data[key];
     return Array.isArray(value) ? value[0] : value;
   }
-  if (typeof data === "string" && data.includes("=")) {
-    return new URLSearchParams(data.replace(/^\?/, "")).get(key);
-  }
-  const url = request.url || request.path || "";
-  const queryString = typeof url === "string" && url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
-  return new URLSearchParams(queryString).get(key);
+  const fromData = queryParamFromString(data, key);
+  if (fromData !== undefined) return fromData;
+  return queryParamFromString(source.url || source.path, key);
+}
+
+function queryParamFromString(value, key) {
+  if (typeof value !== "string") return undefined;
+  const queryString = value.includes("?") ? value.slice(value.indexOf("?") + 1) : value;
+  if (!queryString.includes("=") && !queryString.startsWith("?")) return undefined;
+  const result = new URLSearchParams(queryString.replace(/^\?/, "")).get(key);
+  return result === null ? undefined : result;
 }
 
 function joinFsPath(...parts) {
