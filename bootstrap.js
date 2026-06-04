@@ -2,7 +2,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.7";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.8";
 
 var ObsidianZoteroBridge = {
   endpoints: [
@@ -63,7 +63,8 @@ var ObsidianZoteroBridge = {
       },
       searchUi: {
         installed: this.searchUiInstalled,
-        error: this.searchUiError
+        error: this.searchUiError,
+        bodyRendered: Boolean(this.searchInput)
       },
       generatedAt: new Date().toISOString()
     }));
@@ -377,13 +378,28 @@ var ObsidianZoteroBridge = {
           icon,
           orderable: true
         },
+        bodyXHTML:
+          '<html:div class="local-zotero-bridge-search-loading" style="padding: 10px 12px;">Loading Obsidian search...</html:div>',
+        onInit: ({ doc, body }) => {
+          this.renderSearchSection(doc, body);
+        },
         onItemChange: ({ setEnabled, setSectionSummary }) => {
           setEnabled(true);
           setSectionSummary("Search synced Obsidian notes");
         },
         onRender: ({ doc, body, setSectionSummary }) => {
-          this.renderSearchSection(doc, body);
-          setSectionSummary("Search synced Obsidian notes");
+          try {
+            this.renderSearchSection(doc, body);
+            setSectionSummary("Search synced Obsidian notes");
+          } catch (error) {
+            this.searchUiError = error && error.message ? error.message : String(error);
+            Zotero.logError(error);
+            clearElement(body);
+            const message = createHTML(doc, "div");
+            message.textContent = `Obsidian search failed to render: ${this.searchUiError}`;
+            setStyles(message, { padding: "10px 0", color: "var(--accent-red, #b00020)" });
+            body.appendChild(message);
+          }
         },
         onDestroy: ({ body }) => {
           if (this.searchSectionBody === body) {
@@ -428,6 +444,7 @@ var ObsidianZoteroBridge = {
   },
 
   renderSearchSection(doc, body) {
+    const previousQuery = this.searchInput?.value || "";
     clearElement(body);
     this.searchSectionBody = body;
     setStyles(body, {
@@ -435,23 +452,28 @@ var ObsidianZoteroBridge = {
       flexDirection: "column",
       boxSizing: "border-box",
       minHeight: "260px",
+      padding: "8px 12px 12px",
       color: "var(--fill-primary, #222)",
       font: "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
     });
 
-    const controls = doc.createElement("div");
+    const controls = createHTML(doc, "div");
     setStyles(controls, { padding: "8px 0 10px", borderBottom: "1px solid var(--fill-quinary, #e0e0e0)" });
 
-    const input = doc.createElement("input");
+    const input = createHTML(doc, "input");
     input.type = "search";
     input.placeholder = "搜索 Obsidian 笔记内容...";
+    input.value = previousQuery;
     setStyles(input, {
       width: "100%",
       boxSizing: "border-box",
       padding: "7px 9px",
       border: "1px solid var(--fill-quinary, #c8c8c8)",
       borderRadius: "6px",
-      font: "inherit"
+      background: "var(--material-background, #fff)",
+      color: "inherit",
+      font: "inherit",
+      minHeight: "30px"
     });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
@@ -461,7 +483,7 @@ var ObsidianZoteroBridge = {
     });
     input.addEventListener("input", () => this.scheduleSearchFromPanel());
 
-    const status = doc.createElement("div");
+    const status = createHTML(doc, "div");
     setStyles(status, {
       marginTop: "8px",
       minHeight: "18px",
@@ -469,16 +491,18 @@ var ObsidianZoteroBridge = {
       fontSize: "12px"
     });
     status.textContent = "输入关键词搜索所有同步的 Markdown notes。";
-    controls.append(input, status);
+    controls.appendChild(input);
+    controls.appendChild(status);
 
-    const results = doc.createElement("div");
+    const results = createHTML(doc, "div");
     setStyles(results, {
       flex: "1",
       overflow: "auto",
       padding: "8px 0 4px"
     });
 
-    body.append(controls, results);
+    body.appendChild(controls);
+    body.appendChild(results);
     this.searchInput = input;
     this.searchStatusEl = status;
     this.searchResultsEl = results;
@@ -542,7 +566,7 @@ var ObsidianZoteroBridge = {
     this.setSearchStatus(`${result.total} 个结果`);
 
     if (!result.results.length) {
-      const empty = doc.createElement("div");
+      const empty = createHTML(doc, "div");
       empty.textContent = "没有找到匹配的 Obsidian 笔记。";
       setStyles(empty, { padding: "16px 4px", color: "var(--fill-secondary, #666)" });
       this.searchResultsEl.appendChild(empty);
@@ -555,7 +579,7 @@ var ObsidianZoteroBridge = {
   },
 
   renderSearchResultItem(doc, entry) {
-    const item = doc.createElement("div");
+    const item = createHTML(doc, "div");
     setStyles(item, {
       borderBottom: "1px solid var(--fill-quinary, #e6e6e6)",
       padding: "10px 2px",
@@ -563,15 +587,15 @@ var ObsidianZoteroBridge = {
     });
     item.addEventListener("click", () => this.openSearchResultInObsidian(entry));
 
-    const title = doc.createElement("div");
+    const title = createHTML(doc, "div");
     title.textContent = entry.title || entry.path || "Untitled";
     setStyles(title, { fontWeight: "600", marginBottom: "3px" });
 
-    const meta = doc.createElement("div");
+    const meta = createHTML(doc, "div");
     meta.textContent = [entry.citekey, entry.year, entry.kind].filter(Boolean).join(" · ");
     setStyles(meta, { color: "var(--fill-secondary, #666)", fontSize: "12px", marginBottom: "4px" });
 
-    const path = doc.createElement("div");
+    const path = createHTML(doc, "div");
     path.textContent = entry.path || "";
     setStyles(path, {
       color: "var(--fill-secondary, #666)",
@@ -582,7 +606,7 @@ var ObsidianZoteroBridge = {
       whiteSpace: "nowrap"
     });
 
-    const snippets = doc.createElement("div");
+    const snippets = createHTML(doc, "div");
     const matches = Array.isArray(entry.matches) ? entry.matches.slice(0, 3) : [];
     snippets.textContent = matches.length > 0 ? matches.map((match) => `L${match.line}: ${match.text}`).join("\n") : "";
     setStyles(snippets, {
@@ -591,11 +615,14 @@ var ObsidianZoteroBridge = {
       marginBottom: entry.itemKey || entry.zoteroUri ? "8px" : "0"
     });
 
-    item.append(title, meta, path, snippets);
+    item.appendChild(title);
+    item.appendChild(meta);
+    item.appendChild(path);
+    item.appendChild(snippets);
 
     if (entry.itemKey || entry.zoteroUri) {
-      const actions = doc.createElement("div");
-      const openZotero = doc.createElement("button");
+      const actions = createHTML(doc, "div");
+      const openZotero = createHTML(doc, "button");
       openZotero.type = "button";
       openZotero.textContent = "Open Zotero item";
       setStyles(openZotero, {
@@ -878,6 +905,10 @@ function clearElement(element) {
   while (element.firstChild) {
     element.removeChild(element.firstChild);
   }
+}
+
+function createHTML(doc, tagName) {
+  return doc.createElementNS("http://www.w3.org/1999/xhtml", tagName);
 }
 
 function getQueryParam(request, key) {
