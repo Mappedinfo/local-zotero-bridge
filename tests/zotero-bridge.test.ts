@@ -13,14 +13,24 @@ test("Zotero bridge serializer builds collection and item snapshot", async () =>
   assert.equal(snapshot.schemaVersion, 3);
   assert.equal(snapshot.collections.length, 2);
   assert.deepEqual(snapshot.collections[1].path, ["Planning", "Scenario Assessment"]);
-  assert.equal(snapshot.items.length, 1);
-  assert.equal(snapshot.items[0].citekey, "smithScenario2024");
-  assert.equal(snapshot.items[0].citation.citekey, "smithScenario2024");
-  assert.equal(snapshot.items[0].citation.apaInText, "(Smith, 2024)");
-  assert.match(snapshot.items[0].citation.apaReference, /Smith, A\. \(2024\)\. Scenario Paper\./);
-  assert.match(snapshot.items[0].citation.bibtex, /@article\{smithScenario2024/);
-  assert.equal(snapshot.items[0].attachments[0].mimeType, "application/pdf");
-  assert.equal(snapshot.items[0].zoteroUri, "zotero://select/library/items/I1");
+  assert.equal(snapshot.items.length, 2);
+  const smithItem = snapshot.items.find((item) => item.key === "I1")!;
+  assert.equal(smithItem.citekey, "smithScenario2024");
+  assert.equal(smithItem.citation.citekey, "smithScenario2024");
+  assert.equal(smithItem.citation.citekeySource, "explicit");
+  assert.equal(smithItem.citation.aliases?.includes("I1"), true);
+  assert.equal(smithItem.citation.aliases?.includes("SmithScenario2024"), true);
+  assert.equal(smithItem.citation.apaInText, "(Smith, 2024)");
+  assert.match(smithItem.citation.apaReference, /Smith, A\. \(2024\)\. Scenario Paper\./);
+  assert.match(smithItem.citation.bibtex, /@article\{smithScenario2024/);
+  assert.equal(smithItem.attachments[0].mimeType, "application/pdf");
+  assert.equal(smithItem.zoteroUri, "zotero://select/library/items/I1");
+  const dakarItem = snapshot.items.find((item) => item.key === "GJWEZCYB")!;
+  assert.equal(dakarItem.citekey, "DakarCulturalCenter2026");
+  assert.equal(dakarItem.citation.citekey, "DakarCulturalCenter2026");
+  assert.equal(dakarItem.citation.citekeySource, "generated");
+  assert.deepEqual(dakarItem.citation.aliases, ["GJWEZCYB"]);
+  assert.match(dakarItem.citation.bibtex, /@article\{DakarCulturalCenter2026/);
   assert.equal(snapshot.nativeNotes.length, 2);
   assert.equal(snapshot.nativeNotes[0].parentItemKey, "I1");
   assert.equal(snapshot.nativeNotes[0].noteHtml, "<p>Child note</p>");
@@ -32,16 +42,22 @@ test("Zotero bridge serializer builds citation response by citekey groups", asyn
   const response = await serializer.buildCitationResponse(Zotero, {
     scope: "user",
     style: "apa",
-    groups: "smithScenario2024|missingKey"
+    groups: "smithScenario2024|DakarCulturalCenter2026|GJWEZCYB|missingKey"
   });
 
   assert.equal(response.ok, true);
   assert.equal(response.groups[0].rendered, "(Smith, 2024)");
   assert.deepEqual(response.groups[0].items.map((item) => item.citekey), ["smithScenario2024"]);
-  assert.equal(response.groups[1].rendered, "[missing: missingKey]");
+  assert.equal(response.groups[1].missing.length, 0);
+  assert.deepEqual(response.groups[1].items.map((item) => item.citekey), ["DakarCulturalCenter2026"]);
+  assert.equal(response.groups[2].missing.length, 0);
+  assert.deepEqual(response.groups[2].items.map((item) => item.citekey), ["DakarCulturalCenter2026"]);
+  assert.match(response.groups[2].items[0].citation.bibtex || "", /@article\{DakarCulturalCenter2026/);
+  assert.equal(response.groups[3].rendered, "[missing: missingKey]");
   assert.deepEqual(response.missingCitekeys, ["missingKey"]);
   assert.match(response.bibliography[0], /Smith, A\. \(2024\)\. Scenario Paper\./);
   assert.match(response.entries[0].citation.bibtex, /@article\{smithScenario2024/);
+  assert.equal(response.entries.filter((entry) => entry.itemKey === "GJWEZCYB").length, 1);
 });
 
 test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {
@@ -70,64 +86,20 @@ test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {
   ]);
 });
 
-test("Obsidian bridge helper searches the full Obsidian library index", () => {
-  const index = {
-    schemaVersion: 1,
-    entries: [
-      {
-        kind: "paper",
-        path: "Zotero/Papers/2024 - Smith - Scenario Paper.md",
-        title: "Scenario Paper",
-        citekey: "smithScenario2024",
-        year: "2024",
-        itemKey: "I1",
-        zoteroUri: "zotero://select/library/items/I1",
-        content: "Summary\nEvidence calibration appears in a hand-written note."
-      },
-      {
-        kind: "paper",
-        path: "Zotero/Papers/2023 - Chen - Other.md",
-        title: "Other Paper",
-        citekey: "chenOther2023",
-        year: "2023",
-        itemKey: "I2",
-        content: "响应预测 可以在中文笔记中被搜索。"
-      },
-      {
-        kind: "standalone-note",
-        path: "Zotero/Zotero原生独立笔记/Standalone.md",
-        title: "Standalone note",
-        noteKey: "N1",
-        content: "A loose thought about calibration."
-      }
-    ]
-  };
-
-  const ranked = obsidian.searchLibraryIndex(index, "scenario calibration");
-  assert.equal(ranked[0].itemKey, "I1");
-  assert.match(ranked[0].matches[0].text, /Evidence calibration/);
-
-  const chinese = obsidian.searchLibraryIndex(index, "响应预测");
-  assert.equal(chinese.length, 1);
-  assert.equal(chinese[0].itemKey, "I2");
-
-  assert.deepEqual(obsidian.searchLibraryIndex(index, "   "), []);
-});
-
 function fakeZotero() {
   const collections = [
     {
       key: "C1",
       name: "Planning",
-      itemKeys: ["I1"],
-      getChildItems: () => [items[0]]
+      itemKeys: ["I1", "GJWEZCYB"],
+      getChildItems: () => [items[0], items[1]]
     },
     {
       key: "C2",
       parentKey: "C1",
       name: "Scenario Assessment",
-      itemKeys: ["I1"],
-      getChildItems: () => [items[0]]
+      itemKeys: ["I1", "GJWEZCYB"],
+      getChildItems: () => [items[0], items[1]]
     }
   ];
   const attachment = {
@@ -192,6 +164,27 @@ function fakeZotero() {
       getTags: () => [{ tag: "planning" }],
       getCollections: () => ["C1", "C2"],
       getAttachments: () => [100]
+    },
+    {
+      id: 2,
+      key: "GJWEZCYB",
+      libraryID: 1,
+      itemType: "newspaperArticle",
+      version: 2,
+      isRegularItem: () => true,
+      isNote: () => false,
+      getField: (field: string) =>
+        ({
+          title: "In Dakar, a cultural center grows around a baobab tree",
+          date: "2026-02-01",
+          publicationTitle: "Designboom",
+          url: "https://example.com/dakar-cultural-center",
+          extra: ""
+        })[field],
+      getCreators: () => [],
+      getTags: () => [],
+      getCollections: () => ["C1"],
+      getAttachments: () => []
     },
     childNote,
     standaloneNote

@@ -2,7 +2,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.11";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.12";
 
 var ObsidianZoteroBridge = {
   endpoints: [

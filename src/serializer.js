@@ -140,16 +140,17 @@
     return Promise.all(children.map((attachment) => serializeAttachment(Zotero, attachment, library)));
   }
 
-  async function serializeItem(Zotero, item) {
+  async function serializeItem(Zotero, item, options = {}) {
     const library = getLibrary(Zotero, item.libraryID);
     const attachments = await getAttachments(Zotero, item, library);
-    const citekey = getCitationKey(item) || item.key;
+    const citationInfo = options.citationInfo || buildCitationInfo(item);
+    const citekey = citationInfo.citekey;
 
     return {
       key: item.key,
       library,
       citekey,
-      citation: await buildItemCitationData(Zotero, item, { citekey }),
+      citation: await buildItemCitationData(Zotero, item, { citationInfo }),
       title: getField(item, "title") || "Untitled",
       creators: getCreators(item),
       year: getYear(item),
@@ -185,23 +186,134 @@
     };
   }
 
-  function getCitationKey(item) {
+  function getExplicitCitationKey(item) {
     if (typeof item.getField === "function") {
       const extra = item.getField("extra");
       const match = typeof extra === "string" ? extra.match(/Citation Key:\s*(\S+)/i) : null;
-      if (match) return match[1];
+      if (match) return cleanCitationKey(match[1]);
     }
-    return item.citationKey || item.citekey || undefined;
+    return cleanCitationKey(item.citationKey || item.citekey);
+  }
+
+  function buildCitationInfo(item) {
+    const explicit = getExplicitCitationKey(item);
+    const generated = generateReadableCitekey(item);
+    const citekey = explicit || generated;
+    return {
+      citekey,
+      citekeySource: explicit ? "explicit" : "generated",
+      aliases: unique([explicit, generated, item.citationKey, item.citekey, item.key].map(cleanCitationKey)).filter(
+        (alias) => alias && alias !== citekey
+      )
+    };
+  }
+
+  function buildCitationInfoMap(items) {
+    const grouped = new Map();
+
+    for (const item of items) {
+      const info = buildCitationInfo(item);
+      const group = grouped.get(info.citekey) || [];
+      group.push({ item, info });
+      grouped.set(info.citekey, group);
+    }
+
+    const byItemKey = new Map();
+    for (const [baseCitekey, entries] of grouped.entries()) {
+      entries.sort((a, b) => String(a.item.key || "").localeCompare(String(b.item.key || "")));
+      entries.forEach((entry, index) => {
+        const citekey = index === 0 ? baseCitekey : `${baseCitekey}${alphaSuffix(index)}`;
+        byItemKey.set(entry.item.key, {
+          citekey,
+          citekeySource: entry.info.citekeySource,
+          aliases: unique([baseCitekey, ...entry.info.aliases]).filter((alias) => alias && alias !== citekey)
+        });
+      });
+    }
+
+    return byItemKey;
+  }
+
+  function alphaSuffix(index) {
+    let value = index;
+    let suffix = "";
+    while (value > 0) {
+      value -= 1;
+      suffix = String.fromCharCode(65 + (value % 26)) + suffix;
+      value = Math.floor(value / 26);
+    }
+    return suffix || "A";
+  }
+
+  function cleanCitationKey(value) {
+    const trimmed = String(value || "").trim().replace(/^@/, "");
+    return trimmed || undefined;
+  }
+
+  function generateReadableCitekey(item) {
+    const year = getYear(item) || "NoDate";
+    const author = getCreators(item).find((creator) => creator.creatorType === "author") || getCreators(item)[0];
+    const titleTokens = significantTitleTokens(getField(item, "title") || "Untitled");
+    const authorToken = author ? citekeyToken(creatorLastName(author)) : "";
+    const tokens = authorToken
+      ? [authorToken, titleTokens[0] || "Item", year]
+      : [...titleTokens.slice(0, 3), year];
+    const key = tokens.map(citekeyToken).filter(Boolean).join("");
+    return key || `Item${cleanCitationKey(item.key) || year}`;
+  }
+
+  function significantTitleTokens(title) {
+    const stopWords = new Set([
+      "a",
+      "an",
+      "and",
+      "around",
+      "as",
+      "at",
+      "by",
+      "for",
+      "from",
+      "in",
+      "into",
+      "of",
+      "on",
+      "or",
+      "the",
+      "to",
+      "with"
+    ]);
+    const tokens = asciiWords(title)
+      .map((token) => token.toLowerCase())
+      .filter((token) => token && !stopWords.has(token));
+    return tokens.length > 0 ? tokens : asciiWords(title).map((token) => token.toLowerCase());
+  }
+
+  function citekeyToken(value) {
+    const token = asciiWords(value)[0] || "";
+    if (!token) return "";
+    return `${token[0].toUpperCase()}${token.slice(1).toLowerCase()}`;
+  }
+
+  function asciiWords(value) {
+    return (
+      String(value || "")
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .match(/[A-Za-z0-9]+/g) || []
+    );
   }
 
   async function buildItemCitationData(Zotero, item, options = {}) {
-    const citekey = options.citekey || getCitationKey(item) || item.key;
+    const citationInfo = options.citationInfo || buildCitationInfo(item);
+    const citekey = options.citekey || citationInfo.citekey;
     const style = options.style || "apa";
     const quickCitation = await getQuickCopyText(Zotero, [item], style, true);
     const quickReference = await getQuickCopyText(Zotero, [item], style, false);
 
     return {
       citekey,
+      citekeySource: citationInfo.citekeySource,
+      aliases: citationInfo.aliases,
       apaInText: quickCitation || fallbackParentheticalCitation([item]),
       apaReference: quickReference || fallbackReference(item),
       bibtex: buildBibtex(item, citekey)
@@ -219,14 +331,15 @@
       items.push(...(await getItemsForLibrary(Zotero, libraryID)));
     }
 
+    const citationInfoByItemKey = buildCitationInfoMap(items);
     const itemsByCitekey = new Map();
     for (const item of items) {
-      const citekey = getCitationKey(item) || item.key;
-      if (citekey && !itemsByCitekey.has(citekey)) {
-        itemsByCitekey.set(citekey, item);
-      }
-      if (item.key && !itemsByCitekey.has(item.key)) {
-        itemsByCitekey.set(item.key, item);
+      const citationInfo = citationInfoByItemKey.get(item.key) || buildCitationInfo(item);
+      const keys = [citationInfo.citekey, ...citationInfo.aliases];
+      for (const citekey of keys) {
+        if (citekey && !itemsByCitekey.has(citekey)) {
+          itemsByCitekey.set(citekey, { item, citationInfo });
+        }
       }
     }
 
@@ -235,16 +348,16 @@
     const missingCitekeys = [];
 
     for (const citekey of allRequested) {
-      const item = itemsByCitekey.get(citekey);
-      if (!item) {
+      const resolved = itemsByCitekey.get(citekey);
+      if (!resolved) {
         missingCitekeys.push(citekey);
         continue;
       }
-      const itemCitekey = getCitationKey(item) || item.key;
-      const citation = await buildItemCitationData(Zotero, item, { citekey: itemCitekey, style });
+      const { item, citationInfo } = resolved;
+      const citation = await buildItemCitationData(Zotero, item, { citationInfo, style });
       metadataByCitekey.set(citekey, {
         itemKey: item.key,
-        citekey: itemCitekey,
+        citekey: citationInfo.citekey,
         title: getField(item, "title") || "Untitled",
         citation
       });
@@ -252,7 +365,7 @@
 
     const groupResults = [];
     for (const citekeys of groups) {
-      const groupItems = citekeys.map((citekey) => itemsByCitekey.get(citekey)).filter(Boolean);
+      const groupItems = citekeys.map((citekey) => itemsByCitekey.get(citekey)?.item).filter(Boolean);
       const missing = citekeys.filter((citekey) => !itemsByCitekey.has(citekey));
       const rendered =
         groupItems.length > 0
@@ -269,8 +382,10 @@
       });
     }
 
-    const entries = allRequested.map((citekey) => metadataByCitekey.get(citekey)).filter(Boolean);
-    const bibliographyItems = entries.map((entry) => itemsByCitekey.get(entry.citekey) || itemsByCitekey.get(entry.itemKey)).filter(Boolean);
+    const entries = uniqueCitationEntries(allRequested.map((citekey) => metadataByCitekey.get(citekey)).filter(Boolean));
+    const bibliographyItems = entries
+      .map((entry) => itemsByCitekey.get(entry.citekey)?.item || itemsByCitekey.get(entry.itemKey)?.item)
+      .filter(Boolean);
     const quickBibliography = bibliographyItems.length > 0 ? await getQuickCopyText(Zotero, bibliographyItems, style, false) : "";
     const bibliography = quickBibliography
       ? splitBibliographyText(quickBibliography)
@@ -301,6 +416,18 @@
         )
       )
       .filter((group) => group.length > 0);
+  }
+
+  function uniqueCitationEntries(entries) {
+    const seen = new Set();
+    const uniqueEntries = [];
+    for (const entry of entries) {
+      const key = entry.itemKey || entry.citekey;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueEntries.push(entry);
+    }
+    return uniqueEntries;
   }
 
   async function getQuickCopyText(Zotero, items, style, asCitation) {
@@ -493,6 +620,7 @@
     const collections = [];
     const items = [];
     const nativeNotes = [];
+    const libraryRecords = [];
     let primaryLibrary = null;
 
     for (const libraryID of libraryIDs) {
@@ -503,12 +631,17 @@
       collections.push(...rawCollections.map((collection) => serializeCollection(collection, collectionByKey)));
 
       const rawItems = await getItemsForLibrary(Zotero, libraryID);
-      for (const item of rawItems) {
-        items.push(await serializeItem(Zotero, item));
+      const rawNativeNotes = await getNativeNotesForLibrary(Zotero, libraryID);
+      libraryRecords.push({ rawItems, rawNativeNotes });
+    }
+
+    const citationInfoByItemKey = buildCitationInfoMap(libraryRecords.flatMap((record) => record.rawItems));
+    for (const record of libraryRecords) {
+      for (const item of record.rawItems) {
+        items.push(await serializeItem(Zotero, item, { citationInfo: citationInfoByItemKey.get(item.key) }));
       }
 
-      const rawNativeNotes = await getNativeNotesForLibrary(Zotero, libraryID);
-      for (const note of rawNativeNotes) {
+      for (const note of record.rawNativeNotes) {
         nativeNotes.push(await serializeNativeNote(Zotero, note));
       }
     }
