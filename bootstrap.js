@@ -2,7 +2,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.6";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.7";
 
 var ObsidianZoteroBridge = {
   endpoints: [
@@ -23,8 +23,8 @@ var ObsidianZoteroBridge = {
   fallbackMenuShowingListener: null,
   searchUiInstalled: false,
   searchUiError: null,
-  searchButton: null,
-  searchPanel: null,
+  searchPaneID: null,
+  searchSectionBody: null,
   searchInput: null,
   searchResultsEl: null,
   searchStatusEl: null,
@@ -42,6 +42,7 @@ var ObsidianZoteroBridge = {
   },
 
   startup({ rootURI }) {
+    this.rootURI = rootURI;
     Services.scriptloader.loadSubScript(`${rootURI}src/serializer.js`);
     Services.scriptloader.loadSubScript(`${rootURI}src/obsidian.js`);
     this.registerEndpoint("/obsidian-zotero/status", async () => ({
@@ -355,49 +356,48 @@ var ObsidianZoteroBridge = {
   },
 
   installSearchUi() {
-    const win = Zotero.getMainWindow?.();
-    const doc = win?.document;
-    if (!doc) {
+    if (!Zotero.ItemPaneManager?.registerSection) {
       this.searchUiInstalled = false;
-      this.searchUiError = "Cannot access Zotero main window document";
+      this.searchUiError = "Zotero.ItemPaneManager.registerSection is unavailable";
       return;
     }
     if (this.searchUiInstalled) return;
 
     try {
-      const anchor = this.findQuickSearchAnchor(doc);
-      const parent = anchor?.parentNode || this.findToolbarContainer(doc);
-      if (!parent) {
-        throw new Error("Cannot find Zotero toolbar container");
-      }
-
-      const button = doc.createElement("button");
-      button.id = "local-zotero-bridge-search-button";
-      button.type = "button";
-      button.textContent = "Obsidian";
-      button.setAttribute("title", "Search Obsidian notes");
-      setStyles(button, {
-        marginLeft: "6px",
-        padding: "4px 10px",
-        border: "1px solid var(--fill-quinary, #c8c8c8)",
-        borderRadius: "6px",
-        background: "var(--material-background, #fff)",
-        color: "var(--fill-primary, #222)",
-        font: "inherit",
-        cursor: "pointer"
+      const icon = `${this.rootURI}content/icons/local-zotero-bridge.svg`;
+      const registeredPaneID = Zotero.ItemPaneManager.registerSection({
+        paneID: "obsidian-search",
+        pluginID: LOCAL_ZOTERO_BRIDGE_PLUGIN_ID,
+        header: {
+          l10nID: "local-zotero-bridge-search-pane-header",
+          icon
+        },
+        sidenav: {
+          l10nID: "local-zotero-bridge-search-pane-sidenav",
+          icon,
+          orderable: true
+        },
+        onItemChange: ({ setEnabled, setSectionSummary }) => {
+          setEnabled(true);
+          setSectionSummary("Search synced Obsidian notes");
+        },
+        onRender: ({ doc, body, setSectionSummary }) => {
+          this.renderSearchSection(doc, body);
+          setSectionSummary("Search synced Obsidian notes");
+        },
+        onDestroy: ({ body }) => {
+          if (this.searchSectionBody === body) {
+            this.searchSectionBody = null;
+            this.searchInput = null;
+            this.searchResultsEl = null;
+            this.searchStatusEl = null;
+          }
+        }
       });
-      button.addEventListener("click", () => this.toggleSearchPanel());
-
-      if (anchor?.nextSibling) {
-        parent.insertBefore(button, anchor.nextSibling);
-      } else {
-        parent.appendChild(button);
+      if (!registeredPaneID) {
+        throw new Error("Zotero ItemPaneManager did not register the Obsidian search section");
       }
-
-      const panel = this.buildSearchPanel(doc);
-      (doc.body || doc.documentElement).appendChild(panel);
-      this.searchButton = button;
-      this.searchPanel = panel;
+      this.searchPaneID = registeredPaneID;
       this.searchUiInstalled = true;
       this.searchUiError = null;
     } catch (error) {
@@ -413,104 +413,34 @@ var ObsidianZoteroBridge = {
       this.searchDebounceTimer = null;
     }
     try {
-      this.searchButton?.remove?.();
-      this.searchPanel?.remove?.();
+      if (this.searchPaneID) {
+        Zotero.ItemPaneManager?.unregisterSection?.(this.searchPaneID);
+      }
     } catch (error) {
       Zotero.logError(error);
     }
-    this.searchButton = null;
-    this.searchPanel = null;
+    this.searchPaneID = null;
+    this.searchSectionBody = null;
     this.searchInput = null;
     this.searchResultsEl = null;
     this.searchStatusEl = null;
     this.searchUiInstalled = false;
   },
 
-  findQuickSearchAnchor(doc) {
-    const selectors = [
-      "#zotero-tb-search",
-      "#zotero-toolbar-search",
-      "#quick-search",
-      "#search-box",
-      ".search-box",
-      "input[type='search']",
-      "input[placeholder*='标题']",
-      "input[placeholder*='Title']",
-      "search-textbox"
-    ];
-    for (const selector of selectors) {
-      try {
-        const element = doc.querySelector?.(selector);
-        if (element) return element;
-      } catch {
-        // Try the next selector.
-      }
-    }
-    return null;
-  },
-
-  findToolbarContainer(doc) {
-    return (
-      doc.getElementById?.("zotero-toolbar") ||
-      doc.getElementById?.("zotero-items-toolbar") ||
-      doc.querySelector?.("toolbar") ||
-      doc.body ||
-      doc.documentElement
-    );
-  },
-
-  buildSearchPanel(doc) {
-    const panel = doc.createElement("div");
-    panel.id = "local-zotero-bridge-search-panel";
-    panel.hidden = true;
-    setStyles(panel, {
-      position: "fixed",
-      top: "0",
-      right: "0",
-      bottom: "0",
-      width: "420px",
-      maxWidth: "45vw",
-      zIndex: "10000",
+  renderSearchSection(doc, body) {
+    clearElement(body);
+    this.searchSectionBody = body;
+    setStyles(body, {
       display: "flex",
       flexDirection: "column",
       boxSizing: "border-box",
-      background: "var(--material-background, #fff)",
+      minHeight: "260px",
       color: "var(--fill-primary, #222)",
-      borderLeft: "1px solid var(--fill-quinary, #d0d0d0)",
-      boxShadow: "-8px 0 24px rgba(0, 0, 0, 0.18)",
       font: "13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
     });
 
-    const header = doc.createElement("div");
-    setStyles(header, {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px",
-      padding: "10px 12px",
-      borderBottom: "1px solid var(--fill-quinary, #e0e0e0)"
-    });
-
-    const title = doc.createElement("strong");
-    title.textContent = "Obsidian 搜索";
-    setStyles(title, { flex: "1" });
-
-    const close = doc.createElement("button");
-    close.type = "button";
-    close.textContent = "×";
-    close.setAttribute("title", "Close");
-    setStyles(close, {
-      border: "0",
-      background: "transparent",
-      fontSize: "20px",
-      lineHeight: "1",
-      cursor: "pointer",
-      color: "inherit"
-    });
-    close.addEventListener("click", () => this.hideSearchPanel());
-    header.append(title, close);
-
     const controls = doc.createElement("div");
-    setStyles(controls, { padding: "12px", borderBottom: "1px solid var(--fill-quinary, #e0e0e0)" });
+    setStyles(controls, { padding: "8px 0 10px", borderBottom: "1px solid var(--fill-quinary, #e0e0e0)" });
 
     const input = doc.createElement("input");
     input.type = "search";
@@ -545,34 +475,13 @@ var ObsidianZoteroBridge = {
     setStyles(results, {
       flex: "1",
       overflow: "auto",
-      padding: "8px 10px 14px"
+      padding: "8px 0 4px"
     });
 
-    panel.append(header, controls, results);
+    body.append(controls, results);
     this.searchInput = input;
     this.searchStatusEl = status;
     this.searchResultsEl = results;
-    return panel;
-  },
-
-  toggleSearchPanel() {
-    if (!this.searchPanel) return;
-    if (this.searchPanel.hidden) {
-      this.showSearchPanel();
-    } else {
-      this.hideSearchPanel();
-    }
-  },
-
-  showSearchPanel() {
-    if (!this.searchPanel) return;
-    this.searchPanel.hidden = false;
-    this.searchInput?.focus?.();
-  },
-
-  hideSearchPanel() {
-    if (!this.searchPanel) return;
-    this.searchPanel.hidden = true;
   },
 
   scheduleSearchFromPanel() {
