@@ -3,7 +3,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.13";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.14";
 const BETTER_BIBTEX_ADDON_ID = "better-bibtex@iris-advies.com";
 
 var ObsidianZoteroBridge = {

@@ -197,12 +197,13 @@
 
   function buildCitationInfo(item) {
     const explicit = getExplicitCitationKey(item);
-    const generated = generateReadableCitekey(item);
+    const generatedAliases = generateReadableCitekeyAliases(item);
+    const generated = generatedAliases[0] || generateReadableCitekey(item);
     const citekey = explicit || generated;
     return {
       citekey,
       citekeySource: explicit ? "explicit" : "generated",
-      aliases: unique([explicit, generated, item.citationKey, item.citekey, item.key].map(cleanCitationKey)).filter(
+      aliases: unique([explicit, ...generatedAliases, item.citationKey, item.citekey, item.key].map(cleanCitationKey)).filter(
         (alias) => alias && alias !== citekey
       )
     };
@@ -260,6 +261,35 @@
       : [...titleTokens.slice(0, 3), year];
     const key = tokens.map(citekeyToken).filter(Boolean).join("");
     return key || `Item${cleanCitationKey(item.key) || year}`;
+  }
+
+  function generateReadableCitekeyAliases(item) {
+    const compact = generateReadableCitekey(item);
+    const expanded = generateExpandedTitleCitekey(item);
+    return unique([compact, lowerFirstCitekey(compact), expanded, lowerFirstCitekey(expanded)]).filter(Boolean);
+  }
+
+  function generateExpandedTitleCitekey(item) {
+    const year = getYear(item) || "NoDate";
+    const creators = getCreators(item);
+    const author = creators.find((creator) => creator.creatorType === "author") || creators[0];
+    const titleTokens = significantTitleTokens(getField(item, "title") || "Untitled");
+    const authorToken = author ? citekeyToken(creatorLastName(author)) : "";
+    const tokens = authorToken
+      ? [authorToken, ...titleTokens.slice(0, 4), year]
+      : [...titleTokens.slice(0, 4), year];
+    const key = tokens.map(citekeyToken).filter(Boolean).join("");
+    return key || compactFallbackCitekey(item, year);
+  }
+
+  function compactFallbackCitekey(item, year) {
+    return `Item${cleanCitationKey(item.key) || year}`;
+  }
+
+  function lowerFirstCitekey(value) {
+    const key = cleanCitationKey(value);
+    if (!key) return undefined;
+    return `${key[0].toLowerCase()}${key.slice(1)}`;
   }
 
   function significantTitleTokens(title) {

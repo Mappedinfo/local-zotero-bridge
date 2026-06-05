@@ -13,13 +13,14 @@ test("Zotero bridge serializer builds collection and item snapshot", async () =>
   assert.equal(snapshot.schemaVersion, 3);
   assert.equal(snapshot.collections.length, 2);
   assert.deepEqual(snapshot.collections[1].path, ["Planning", "Scenario Assessment"]);
-  assert.equal(snapshot.items.length, 2);
+  assert.equal(snapshot.items.length, 3);
   const smithItem = snapshot.items.find((item) => item.key === "I1")!;
   assert.equal(smithItem.citekey, "smithScenario2024");
   assert.equal(smithItem.citation.citekey, "smithScenario2024");
   assert.equal(smithItem.citation.citekeySource, "explicit");
   assert.equal(smithItem.citation.aliases?.includes("I1"), true);
   assert.equal(smithItem.citation.aliases?.includes("SmithScenario2024"), true);
+  assert.equal(smithItem.citation.aliases?.includes("smithScenarioPaper2024"), true);
   assert.equal(smithItem.citation.apaInText, "(Smith, 2024)");
   assert.match(smithItem.citation.apaReference, /Smith, A\. \(2024\)\. Scenario Paper\./);
   assert.match(smithItem.citation.bibtex, /@article\{smithScenario2024/);
@@ -29,8 +30,11 @@ test("Zotero bridge serializer builds collection and item snapshot", async () =>
   assert.equal(dakarItem.citekey, "DakarCulturalCenter2026");
   assert.equal(dakarItem.citation.citekey, "DakarCulturalCenter2026");
   assert.equal(dakarItem.citation.citekeySource, "generated");
-  assert.deepEqual(dakarItem.citation.aliases, ["GJWEZCYB"]);
+  assert.equal(dakarItem.citation.aliases?.includes("GJWEZCYB"), true);
   assert.match(dakarItem.citation.bibtex, /@article\{DakarCulturalCenter2026/);
+  const zhangItem = snapshot.items.find((item) => item.key === "MPTCCNQ2")!;
+  assert.equal(zhangItem.citekey, "ZhangMulti2024");
+  assert.equal(zhangItem.citation.aliases?.includes("zhangMultiObjectiveOptimizationMethod2024"), true);
   assert.equal(snapshot.nativeNotes.length, 2);
   assert.equal(snapshot.nativeNotes[0].parentItemKey, "I1");
   assert.equal(snapshot.nativeNotes[0].noteHtml, "<p>Child note</p>");
@@ -42,7 +46,7 @@ test("Zotero bridge serializer builds citation response by citekey groups", asyn
   const response = await serializer.buildCitationResponse(Zotero, {
     scope: "user",
     style: "apa",
-    groups: "smithScenario2024|DakarCulturalCenter2026|GJWEZCYB|missingKey"
+    groups: "smithScenario2024|DakarCulturalCenter2026|GJWEZCYB|zhangMultiObjectiveOptimizationMethod2024|missingKey"
   });
 
   assert.equal(response.ok, true);
@@ -53,7 +57,9 @@ test("Zotero bridge serializer builds citation response by citekey groups", asyn
   assert.equal(response.groups[2].missing.length, 0);
   assert.deepEqual(response.groups[2].items.map((item) => item.citekey), ["DakarCulturalCenter2026"]);
   assert.match(response.groups[2].items[0].citation.bibtex || "", /@article\{DakarCulturalCenter2026/);
-  assert.equal(response.groups[3].rendered, "[missing: missingKey]");
+  assert.equal(response.groups[3].missing.length, 0);
+  assert.deepEqual(response.groups[3].items.map((item) => item.citekey), ["ZhangMulti2024"]);
+  assert.equal(response.groups[4].rendered, "[missing: missingKey]");
   assert.deepEqual(response.missingCitekeys, ["missingKey"]);
   assert.match(response.bibliography[0], /Smith, A\. \(2024\)\. Scenario Paper\./);
   assert.match(response.entries[0].citation.bibtex, /@article\{smithScenario2024/);
@@ -91,15 +97,15 @@ function fakeZotero() {
     {
       key: "C1",
       name: "Planning",
-      itemKeys: ["I1", "GJWEZCYB"],
-      getChildItems: () => [items[0], items[1]]
+      itemKeys: ["I1", "GJWEZCYB", "MPTCCNQ2"],
+      getChildItems: () => [items[0], items[1], items[2]]
     },
     {
       key: "C2",
       parentKey: "C1",
       name: "Scenario Assessment",
-      itemKeys: ["I1", "GJWEZCYB"],
-      getChildItems: () => [items[0], items[1]]
+      itemKeys: ["I1", "GJWEZCYB", "MPTCCNQ2"],
+      getChildItems: () => [items[0], items[1], items[2]]
     }
   ];
   const attachment = {
@@ -184,6 +190,26 @@ function fakeZotero() {
       getCreators: () => [],
       getTags: () => [],
       getCollections: () => ["C1"],
+      getAttachments: () => []
+    },
+    {
+      id: 3,
+      key: "MPTCCNQ2",
+      libraryID: 1,
+      itemType: "journalArticle",
+      version: 1,
+      isRegularItem: () => true,
+      isNote: () => false,
+      getField: (field: string) =>
+        ({
+          title: "A Multi‐Objective Optimization Method for Shelter Site Selection Based on Deep Reinforcement Learning",
+          date: "2024-01-01",
+          publicationTitle: "Journal",
+          extra: "Citation Key: ZhangMulti2024"
+        })[field],
+      getCreators: () => [{ firstName: "Wei", lastName: "Zhang", creatorType: "author" }],
+      getTags: () => [],
+      getCollections: () => ["C1", "C2"],
       getAttachments: () => []
     },
     childNote,
