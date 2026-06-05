@@ -1,12 +1,13 @@
 {
   "name": "local-zotero-bridge",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "type": "module",
   "private": true,
   "scripts": {
     "test": "node --experimental-transform-types --test tests/*.test.ts",
     "build": "node scripts/build.mjs",
-    "package": "npm run build && node scripts/package-xpi.mjs"
+    "package": "npm run build && node scripts/package-xpi.mjs",
+    "safe-install:profile": "npm run package && node scripts/safe-local-install.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.3"

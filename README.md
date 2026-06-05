@@ -25,4 +25,16 @@ npm run package
 
 ## Distribution
 
-Attach `release/local-zotero-bridge-0.2.12.xpi` to the GitHub release `v0.2.12`, then keep `updates.json` on the default branch so Zotero can check for updates.
+Attach `release/local-zotero-bridge-0.2.13.xpi` to the GitHub release `v0.2.13`, then keep `updates.json` on the default branch so Zotero can check for updates.
+
+Normal users should update through Zotero's add-on manager and this repository's `updates.json` manifest. For local development installs, use the guarded installer instead of editing Zotero profile files by hand:
+
+```bash
+npm run safe-install:profile -- --profile "/path/to/Zotero/Profiles/xxxx.default"
+```
+
+The safe installer only replaces `local-zotero-bridge@mappedinfo.com.xpi` and verifies that no other Zotero add-on changed its enabled/disabled state. It also supports a read-only check:
+
+```bash
+node scripts/safe-local-install.mjs --dry-run --profile "/path/to/Zotero/Profiles/xxxx.default"
+```

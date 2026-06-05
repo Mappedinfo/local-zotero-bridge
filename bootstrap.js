@@ -1,8 +1,10 @@
 /* global Services, Zotero, ObsidianZoteroBridgeSerializer */
+/* global AddonManager, ChromeUtils, Components */
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.12";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.13";
+const BETTER_BIBTEX_ADDON_ID = "better-bibtex@iris-advies.com";
 
 var ObsidianZoteroBridge = {
   endpoints: [
@@ -46,29 +48,38 @@ var ObsidianZoteroBridge = {
     this.rootURI = rootURI;
     Services.scriptloader.loadSubScript(`${rootURI}src/serializer.js`);
     Services.scriptloader.loadSubScript(`${rootURI}src/obsidian.js`);
-    this.registerEndpoint("/obsidian-zotero/status", async () => ({
-      ok: true,
-      plugin: "Local Zotero Bridge",
-      version: LOCAL_ZOTERO_BRIDGE_VERSION,
-      zoteroVersion: Zotero.version,
-      schemaVersion: 3,
-      menu: {
-        managerAvailable: Boolean(Zotero.MenuManager?.registerMenu),
-        localeInserted: this.localeInserted,
-        registeredMenuIDs: this.menuIDs,
-        registration: this.menuRegistration,
-        fallbackInstalled: this.fallbackMenuInstalled,
-        fallbackError: this.fallbackMenuError,
-        activeCommand: this.activeMenuCommand,
-        lastCommand: this.lastMenuCommand
-      },
-      searchUi: {
-        installed: this.searchUiInstalled,
-        error: this.searchUiError,
-        bodyRendered: Boolean(this.searchInput?.isConnected)
-      },
-      generatedAt: new Date().toISOString()
-    }));
+    this.registerEndpoint("/obsidian-zotero/status", async () => {
+      const addons = await this.getAddonHealth();
+      return {
+        ok: true,
+        plugin: "Local Zotero Bridge",
+        version: LOCAL_ZOTERO_BRIDGE_VERSION,
+        zoteroVersion: Zotero.version,
+        schemaVersion: 3,
+        menu: {
+          managerAvailable: Boolean(Zotero.MenuManager?.registerMenu),
+          localeInserted: this.localeInserted,
+          registeredMenuIDs: this.menuIDs,
+          registration: this.menuRegistration,
+          fallbackInstalled: this.fallbackMenuInstalled,
+          fallbackError: this.fallbackMenuError,
+          activeCommand: this.activeMenuCommand,
+          lastCommand: this.lastMenuCommand
+        },
+        searchUi: {
+          installed: this.searchUiInstalled,
+          error: this.searchUiError,
+          bodyRendered: Boolean(this.searchInput?.isConnected)
+        },
+        addons,
+        updateSafety: {
+          bridgeAddonID: LOCAL_ZOTERO_BRIDGE_PLUGIN_ID,
+          criticalCitationAddonID: BETTER_BIBTEX_ADDON_ID,
+          policy: "Bridge updates must only replace the Local Zotero Bridge add-on and must not change userDisabled/appDisabled state for any other Zotero add-on."
+        },
+        generatedAt: new Date().toISOString()
+      };
+    });
     this.registerEndpoint("/obsidian-zotero/snapshot", async (request) => {
       const options = {
         scope: getQueryParam(request, "scope") || "all"
@@ -82,7 +93,8 @@ var ObsidianZoteroBridge = {
         groups: requestValue(request, body, "groups") || "",
         scope: requestValue(request, body, "scope") || "all"
       };
-      return ObsidianZoteroBridgeSerializer.buildCitationResponse(Zotero, options);
+      const response = await ObsidianZoteroBridgeSerializer.buildCitationResponse(Zotero, options);
+      return this.withCitationHealthWarnings(response, await this.getAddonHealth());
     });
     this.registerEndpoint("/obsidian-zotero/search-obsidian-note", async (request) => {
       const itemKey = getQueryParam(request, "itemKey");
@@ -908,6 +920,61 @@ var ObsidianZoteroBridge = {
     }
   },
 
+  async getAddonHealth() {
+    const health = {
+      ok: true,
+      inspected: false,
+      betterBibTeX: serializeAddonState(null, BETTER_BIBTEX_ADDON_ID),
+      disabledAddons: [],
+      warnings: []
+    };
+    const manager = getAddonManager();
+    if (!manager) {
+      health.ok = false;
+      health.warnings.push("Cannot inspect Zotero add-ons; Better BibTeX citekeys may be unavailable if the add-on is disabled.");
+      return health;
+    }
+
+    health.inspected = true;
+    const betterBibtex = await addonManagerGetAddonByID(manager, BETTER_BIBTEX_ADDON_ID);
+    health.betterBibTeX = serializeAddonState(betterBibtex, BETTER_BIBTEX_ADDON_ID);
+
+    if (!betterBibtex) {
+      health.warnings.push("Better BibTeX is not installed; explicit Citation Key values may be unavailable.");
+    } else if (!isAddonEnabled(betterBibtex)) {
+      health.warnings.push("Better BibTeX is installed but disabled or inactive; enable it and restart Zotero before syncing citekeys.");
+    }
+
+    const allAddons = await addonManagerGetAllAddons(manager);
+    health.disabledAddons = allAddons
+      .filter((addon) => addon?.type === "extension" && addon.id !== LOCAL_ZOTERO_BRIDGE_PLUGIN_ID && addon.visible !== false)
+      .filter((addon) => !isAddonEnabled(addon))
+      .map((addon) => serializeAddonState(addon, addon.id));
+
+    if (health.disabledAddons.length > 0) {
+      const names = health.disabledAddons.map((addon) => addon.name || addon.id).join(", ");
+      health.warnings.push(`Disabled Zotero add-ons detected: ${names}`);
+    }
+
+    health.warnings = uniqueStrings(health.warnings);
+    health.ok = health.warnings.length === 0;
+    return health;
+  },
+
+  withCitationHealthWarnings(response, addonHealth) {
+    const warnings = Array.isArray(response?.warnings) ? response.warnings.slice() : [];
+    if (response?.missingCitekeys?.length > 0 && Array.isArray(addonHealth?.warnings)) {
+      warnings.push(...addonHealth.warnings);
+    }
+    const uniqueWarnings = uniqueStrings(warnings);
+    return {
+      ...response,
+      addons: addonHealth,
+      warnings: uniqueWarnings,
+      error: response?.error || (uniqueWarnings.length > 0 ? uniqueWarnings.join("; ") : undefined)
+    };
+  },
+
   launchURL(uri) {
     if (typeof Zotero.launchURL === "function") {
       Zotero.launchURL(uri);
@@ -916,6 +983,91 @@ var ObsidianZoteroBridge = {
     Zotero.getMainWindow?.()?.open(uri);
   }
 };
+
+async function addonManagerGetAddonByID(manager, id) {
+  try {
+    const addon = manager.getAddonByID?.(id);
+    return typeof addon?.then === "function" ? await addon : addon || null;
+  } catch (error) {
+    Zotero.logError?.(error);
+    return null;
+  }
+}
+
+async function addonManagerGetAllAddons(manager) {
+  try {
+    const addons = manager.getAllAddons?.();
+    return (typeof addons?.then === "function" ? await addons : addons) || [];
+  } catch (error) {
+    Zotero.logError?.(error);
+    return [];
+  }
+}
+
+function getAddonManager() {
+  if (typeof AddonManager !== "undefined") return AddonManager;
+  if (typeof ChromeUtils !== "undefined") {
+    try {
+      return ChromeUtils.importESModule?.("resource://gre/modules/AddonManager.sys.mjs")?.AddonManager || null;
+    } catch {
+      // Fall through to older Zotero/Firefox module paths.
+    }
+    try {
+      return ChromeUtils.import?.("resource://gre/modules/AddonManager.jsm")?.AddonManager || null;
+    } catch {
+      // Fall through to Components import.
+    }
+  }
+  if (typeof Components !== "undefined") {
+    try {
+      const target = {};
+      Components.utils.import("resource://gre/modules/AddonManager.jsm", target);
+      return target.AddonManager || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function serializeAddonState(addon, fallbackID) {
+  if (!addon) {
+    return {
+      id: fallbackID,
+      installed: false,
+      enabled: false,
+      active: false,
+      userDisabled: null,
+      appDisabled: null,
+      softDisabled: null,
+      state: "missing"
+    };
+  }
+  const active = addon.isActive !== undefined ? Boolean(addon.isActive) : addon.active !== undefined ? Boolean(addon.active) : true;
+  const state = isAddonEnabled(addon) ? "available" : "disabled";
+  return {
+    id: addon.id || fallbackID,
+    name: addon.name || addon.defaultLocale?.name,
+    version: addon.version,
+    installed: true,
+    enabled: state === "available",
+    active,
+    userDisabled: Boolean(addon.userDisabled),
+    appDisabled: Boolean(addon.appDisabled),
+    softDisabled: Boolean(addon.softDisabled),
+    state
+  };
+}
+
+function isAddonEnabled(addon) {
+  if (!addon) return false;
+  const active = addon.isActive !== undefined ? Boolean(addon.isActive) : addon.active !== undefined ? Boolean(addon.active) : true;
+  return active && !addon.userDisabled && !addon.appDisabled && !addon.softDisabled;
+}
+
+function uniqueStrings(values) {
+  return [...new Set((values || []).filter(Boolean))];
+}
 
 function install() {}
 
