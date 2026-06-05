@@ -25,7 +25,7 @@ npm run package
 
 ## Distribution
 
-Attach `release/local-zotero-bridge-0.2.14.xpi` to the GitHub release `v0.2.14`, then keep `updates.json` on the default branch so Zotero can check for updates.
+Attach `release/local-zotero-bridge-0.2.15.xpi` to the GitHub release `v0.2.15`, then keep `updates.json` on the default branch so Zotero can check for updates.
 
 Normal users should update through Zotero's add-on manager and this repository's `updates.json` manifest. For local development installs, use the guarded installer instead of editing Zotero profile files by hand:
 

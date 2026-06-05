@@ -3,7 +3,7 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.14";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.15";
 const BETTER_BIBTEX_ADDON_ID = "better-bibtex@iris-advies.com";
 
 var ObsidianZoteroBridge = {
@@ -11,6 +11,7 @@ var ObsidianZoteroBridge = {
     "/obsidian-zotero/status",
     "/obsidian-zotero/snapshot",
     "/obsidian-zotero/citations",
+    "/obsidian-zotero/obsidian-note",
     "/obsidian-zotero/search-obsidian-note",
     "/obsidian-zotero/search-obsidian-library"
   ],
@@ -46,6 +47,7 @@ var ObsidianZoteroBridge = {
 
   startup({ rootURI }) {
     this.rootURI = rootURI;
+    Services.scriptloader.loadSubScript(`${rootURI}src/obsidian-note.js`);
     Services.scriptloader.loadSubScript(`${rootURI}src/serializer.js`);
     Services.scriptloader.loadSubScript(`${rootURI}src/obsidian.js`);
     this.registerEndpoint("/obsidian-zotero/status", async () => {
@@ -95,6 +97,17 @@ var ObsidianZoteroBridge = {
       };
       const response = await ObsidianZoteroBridgeSerializer.buildCitationResponse(Zotero, options);
       return this.withCitationHealthWarnings(response, await this.getAddonHealth());
+    });
+    this.registerEndpoint("/obsidian-zotero/obsidian-note", async (request) => {
+      const body = parseRequestBody(request);
+      const isWrite = isPostRequest(request) || Object.prototype.hasOwnProperty.call(body, "markdown");
+      if (isWrite) {
+        return ObsidianZoteroBridgeObsidianNotes.syncObsidianNote(Zotero, body);
+      }
+      return ObsidianZoteroBridgeObsidianNotes.getObsidianNote(Zotero, {
+        itemKey: requestValue(request, body, "itemKey"),
+        noteKey: requestValue(request, body, "noteKey")
+      });
     });
     this.registerEndpoint("/obsidian-zotero/search-obsidian-note", async (request) => {
       const itemKey = getQueryParam(request, "itemKey");
@@ -1110,6 +1123,11 @@ function requestValue(request, body, key) {
     return Array.isArray(value) ? value[0] : value;
   }
   return getQueryParam(request, key);
+}
+
+function isPostRequest(request) {
+  const method = String(request?.method || request?.httpMethod || "").toUpperCase();
+  return method === "POST";
 }
 
 function parseRequestBody(request) {

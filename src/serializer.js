@@ -631,7 +631,14 @@
 
   async function getNativeNotesForLibrary(Zotero, libraryID) {
     const allItems = await getAllItemsForLibrary(Zotero, libraryID);
-    return allItems.filter((item) => item && isNativeNote(item));
+    const notes = [];
+    for (const item of allItems) {
+      if (!item || !isNativeNote(item)) continue;
+      const noteHtml = await getNoteHtml(item);
+      if (root.ObsidianZoteroBridgeObsidianNotes?.isObsidianOriginNoteHtml?.(noteHtml)) continue;
+      notes.push(item);
+    }
+    return notes;
   }
 
   async function getAllItemsForLibrary(Zotero, libraryID) {

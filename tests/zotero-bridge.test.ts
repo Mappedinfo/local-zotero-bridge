@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import "../src/obsidian-note.js";
 import "../src/serializer.js";
 import "../src/obsidian.js";
 
 const serializer = globalThis.ObsidianZoteroBridgeSerializer;
 const obsidian = globalThis.ObsidianZoteroBridgeObsidian;
+const obsidianNotes = globalThis.ObsidianZoteroBridgeObsidianNotes;
 
 test("Zotero bridge serializer builds collection and item snapshot", async () => {
   const Zotero = fakeZotero();
+  const hash = obsidianNotes.hashMarkdownContent("Obsidian-only note");
+  await obsidianNotes.syncObsidianNote(Zotero, {
+    itemKey: "I1",
+    sourcePath: "Zotero/Papers/Scenario.md",
+    markdown: "Obsidian-only note",
+    contentHash: hash,
+    baseHash: ""
+  });
   const snapshot = await serializer.buildSnapshot(Zotero, { scope: "user" });
 
   assert.equal(snapshot.schemaVersion, 3);
@@ -66,6 +76,64 @@ test("Zotero bridge serializer builds citation response by citekey groups", asyn
   assert.equal(response.entries.filter((entry) => entry.itemKey === "GJWEZCYB").length, 1);
 });
 
+test("Zotero bridge syncs one Obsidian-origin child note with conflict detection", async () => {
+  const Zotero = fakeZotero();
+  const firstMarkdown = "## Summary\nMine from Obsidian";
+  const firstHash = obsidianNotes.hashMarkdownContent(firstMarkdown);
+  const created = await obsidianNotes.syncObsidianNote(Zotero, {
+    itemKey: "I1",
+    sourcePath: "Zotero/Papers/Scenario.md",
+    markdown: firstMarkdown,
+    contentHash: firstHash,
+    baseHash: ""
+  });
+
+  assert.equal(created.status, "created");
+  assert.ok(created.noteKey);
+
+  const found = await obsidianNotes.getObsidianNote(Zotero, { itemKey: "I1" });
+  assert.equal(found.status, "found");
+  assert.equal(found.contentHash, firstHash);
+  assert.match(found.markdown, /Mine from Obsidian/);
+
+  const secondMarkdown = "## Summary\nUpdated from Obsidian";
+  const secondHash = obsidianNotes.hashMarkdownContent(secondMarkdown);
+  const updated = await obsidianNotes.syncObsidianNote(Zotero, {
+    itemKey: "I1",
+    sourcePath: "Zotero/Papers/Scenario.md",
+    markdown: secondMarkdown,
+    contentHash: secondHash,
+    baseHash: firstHash,
+    noteKey: created.noteKey
+  });
+  assert.equal(updated.status, "updated");
+  assert.equal(updated.noteKey, created.noteKey);
+
+  const unchanged = await obsidianNotes.syncObsidianNote(Zotero, {
+    itemKey: "I1",
+    sourcePath: "Zotero/Papers/Scenario.md",
+    markdown: secondMarkdown,
+    contentHash: secondHash,
+    baseHash: secondHash,
+    noteKey: created.noteKey
+  });
+  assert.equal(unchanged.status, "unchanged");
+
+  const remoteNote = Zotero.Items.getByLibraryAndKey(1, created.noteKey)!;
+  remoteNote.setNote(remoteNote.getNote().replace("Updated from Obsidian", "Edited in Zotero"));
+  await remoteNote.saveTx();
+  const conflict = await obsidianNotes.syncObsidianNote(Zotero, {
+    itemKey: "I1",
+    sourcePath: "Zotero/Papers/Scenario.md",
+    markdown: "## Summary\nThird local edit",
+    contentHash: obsidianNotes.hashMarkdownContent("## Summary\nThird local edit"),
+    baseHash: secondHash,
+    noteKey: created.noteKey
+  });
+  assert.equal(conflict.status, "conflict");
+  assert.match(conflict.remoteMarkdown, /Edited in Zotero/);
+});
+
 test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {
   const item = {
     key: "I1",
@@ -93,6 +161,7 @@ test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {
 });
 
 function fakeZotero() {
+  let nextID = 200;
   const collections = [
     {
       key: "C1",
@@ -109,6 +178,7 @@ function fakeZotero() {
     }
   ];
   const attachment = {
+    id: 100,
     key: "A1",
     libraryID: 1,
     attachmentContentType: "application/pdf",
@@ -119,36 +189,66 @@ function fakeZotero() {
         contentType: "application/pdf"
       })[field]
   };
-  const childNote = {
-    key: "N1",
-    libraryID: 1,
-    itemType: "note",
-    version: 3,
-    parentItemID: 1,
-    isNote: () => true,
-    isRegularItem: () => false,
-    getNote: () => "<p>Child note</p>",
-    getNoteTitle: () => "Child note title",
-    getField: (field: string) =>
-      ({
-        title: "Child note title",
-        dateModified: "2026-06-01 12:00:00"
-      })[field]
-  };
-  const standaloneNote = {
-    key: "N2",
-    libraryID: 1,
-    itemType: "note",
-    version: 4,
-    isNote: () => true,
-    isRegularItem: () => false,
-    getNote: () => "<p>Standalone note</p>",
-    getField: (field: string) =>
-      ({
-        title: "Standalone note",
-        dateModified: "2026-06-01 13:00:00"
-      })[field]
-  };
+
+  class FakeNoteItem {
+    id: number;
+    key: string;
+    libraryID = 1;
+    itemType = "note";
+    version = 0;
+    parentItemID?: number;
+    private noteHtml = "";
+
+    constructor(itemType = "note") {
+      this.id = nextID++;
+      this.key = `N${this.id}`;
+      this.itemType = itemType;
+    }
+
+    isNote() {
+      return this.itemType.toLowerCase() === "note";
+    }
+
+    isRegularItem() {
+      return false;
+    }
+
+    setNote(html: string) {
+      this.noteHtml = html;
+    }
+
+    getNote() {
+      return this.noteHtml;
+    }
+
+    getNoteTitle() {
+      return obsidianNotes.noteHtmlToMarkdown(this.noteHtml).split("\n")[0] || "Fake note";
+    }
+
+    getField(field: string) {
+      return ({ title: this.getNoteTitle(), dateModified: "2026-06-01 12:00:00" })[field];
+    }
+
+    async saveTx() {
+      if (!items.includes(this)) items.push(this);
+      this.version += 1;
+      return this.id;
+    }
+  }
+
+  const childNote = new FakeNoteItem();
+  childNote.id = 10;
+  childNote.key = "N1";
+  childNote.version = 3;
+  childNote.parentItemID = 1;
+  childNote.setNote("<p>Child note</p>");
+
+  const standaloneNote = new FakeNoteItem();
+  standaloneNote.id = 11;
+  standaloneNote.key = "N2";
+  standaloneNote.version = 4;
+  standaloneNote.setNote("<p>Standalone note</p>");
+
   const items = [
     {
       id: 1,
@@ -169,7 +269,8 @@ function fakeZotero() {
       getCreators: () => [{ firstName: "Ada", lastName: "Smith", creatorType: "author" }],
       getTags: () => [{ tag: "planning" }],
       getCollections: () => ["C1", "C2"],
-      getAttachments: () => [100]
+      getAttachments: () => [100],
+      getNotes: () => items.filter((item) => item.isNote?.() && item.parentItemID === 1).map((item) => item.id)
     },
     {
       id: 2,
@@ -190,7 +291,8 @@ function fakeZotero() {
       getCreators: () => [],
       getTags: () => [],
       getCollections: () => ["C1"],
-      getAttachments: () => []
+      getAttachments: () => [],
+      getNotes: () => []
     },
     {
       id: 3,
@@ -210,7 +312,8 @@ function fakeZotero() {
       getCreators: () => [{ firstName: "Wei", lastName: "Zhang", creatorType: "author" }],
       getTags: () => [],
       getCollections: () => ["C1", "C2"],
-      getAttachments: () => []
+      getAttachments: () => [],
+      getNotes: () => []
     },
     childNote,
     standaloneNote
@@ -218,6 +321,7 @@ function fakeZotero() {
 
   return {
     version: "7.0",
+    Item: FakeNoteItem,
     Libraries: {
       userLibraryID: 1,
       isGroupLibrary: () => false,
@@ -230,9 +334,9 @@ function fakeZotero() {
       getAll: async () => items,
       get: (id: number) => {
         if (id === 100) return attachment;
-        if (id === 1) return items[0];
-        return undefined;
-      }
+        return items.find((item) => item.id === id);
+      },
+      getByLibraryAndKey: (_libraryID: number, key: string) => items.find((item) => item.key === key)
     },
     Groups: {
       getAll: () => []

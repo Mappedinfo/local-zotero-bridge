@@ -14,6 +14,7 @@ for (const file of [
   "manifest.json",
   "bootstrap.js",
   "prefs.js",
+  "src/obsidian-note.js",
   "src/serializer.js",
   "src/obsidian.js",
   "content/icons/local-zotero-bridge.svg",
