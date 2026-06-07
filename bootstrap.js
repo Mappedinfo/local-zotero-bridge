@@ -62,6 +62,7 @@ var ObsidianZoteroBridge = {
         version: LOCAL_ZOTERO_BRIDGE_VERSION,
         zoteroVersion: Zotero.version,
         schemaVersion: 3,
+        snapshotCitationMode: "fast",
         menu: {
           managerAvailable: Boolean(Zotero.MenuManager?.registerMenu),
           localeInserted: this.localeInserted,
@@ -92,7 +93,8 @@ var ObsidianZoteroBridge = {
     });
     this.registerEndpoint("/obsidian-zotero/snapshot", async (request) => {
       const options = {
-        scope: getQueryParam(request, "scope") || "all"
+        scope: getQueryParam(request, "scope") || "all",
+        citationMode: snapshotCitationModeForRequest(request)
       };
       return ObsidianZoteroBridgeSerializer.buildSnapshot(Zotero, options);
     });
@@ -1036,6 +1038,16 @@ function requestValue(request, body, key) {
     return Array.isArray(value) ? value[0] : value;
   }
   return getQueryParam(request, key);
+}
+
+function snapshotCitationModeForRequest(request) {
+  const explicit = String(getQueryParam(request, "citationMode") || getQueryParam(request, "citation_mode") || "").toLowerCase();
+  if (explicit === "csl" || explicit === "full") return "csl";
+  if (explicit === "fast" || explicit === "metadata") return "fast";
+
+  const includeCsl = String(getQueryParam(request, "includeCsl") || getQueryParam(request, "include_csl") || "").toLowerCase();
+  if (includeCsl === "1" || includeCsl === "true" || includeCsl === "yes") return "csl";
+  return "fast";
 }
 
 function isPostRequest(request) {

@@ -144,13 +144,14 @@
     const library = getLibrary(Zotero, item.libraryID);
     const attachments = await getAttachments(Zotero, item, library);
     const citationInfo = options.citationInfo || buildCitationInfo(item);
+    const citationMode = normalizeCitationMode(options.citationMode || options.mode);
     const citekey = citationInfo.citekey;
 
     return {
       key: item.key,
       library,
       citekey,
-      citation: await buildItemCitationData(Zotero, item, { citationInfo }),
+      citation: await buildItemCitationData(Zotero, item, { citationInfo, mode: citationMode }),
       title: getField(item, "title") || "Untitled",
       creators: getCreators(item),
       year: getYear(item),
@@ -334,6 +335,11 @@
   }
 
   async function buildItemCitationData(Zotero, item, options = {}) {
+    const mode = normalizeCitationMode(options.mode || options.citationMode || "csl");
+    if (mode === "fast") {
+      return buildFastItemCitationData(item, options);
+    }
+
     const citationInfo = options.citationInfo || buildCitationInfo(item);
     const citekey = options.citekey || citationInfo.citekey;
     const style = options.style || "apa";
@@ -348,6 +354,24 @@
       apaReference: quickReference || fallbackReference(item),
       bibtex: buildBibtex(item, citekey)
     };
+  }
+
+  function buildFastItemCitationData(item, options = {}) {
+    const citationInfo = options.citationInfo || buildCitationInfo(item);
+    const citekey = options.citekey || citationInfo.citekey;
+
+    return {
+      citekey,
+      citekeySource: citationInfo.citekeySource,
+      aliases: citationInfo.aliases,
+      apaInText: fallbackParentheticalCitation([item]),
+      apaReference: fallbackReference(item),
+      bibtex: buildBibtex(item, citekey)
+    };
+  }
+
+  function normalizeCitationMode(mode) {
+    return mode === "csl" || mode === "full" ? "csl" : "fast";
   }
 
   async function buildCitationResponse(Zotero, options = {}) {
@@ -653,6 +677,7 @@
 
   async function buildSnapshot(Zotero, options = {}) {
     const scope = options.scope || "all";
+    const citationMode = normalizeCitationMode(options.citationMode || options.mode || "fast");
     const libraryIDs = await getLibraries(Zotero, scope);
     const collections = [];
     const items = [];
@@ -675,7 +700,12 @@
     const citationInfoByItemKey = buildCitationInfoMap(libraryRecords.flatMap((record) => record.rawItems));
     for (const record of libraryRecords) {
       for (const item of record.rawItems) {
-        items.push(await serializeItem(Zotero, item, { citationInfo: citationInfoByItemKey.get(item.key) }));
+        items.push(
+          await serializeItem(Zotero, item, {
+            citationInfo: citationInfoByItemKey.get(item.key),
+            citationMode
+          })
+        );
       }
 
       for (const note of record.rawNativeNotes) {
@@ -685,6 +715,7 @@
 
     return {
       schemaVersion: SCHEMA_VERSION,
+      citationMode,
       generatedAt: new Date().toISOString(),
       library: primaryLibrary || { id: "unknown", type: "user" },
       collections,

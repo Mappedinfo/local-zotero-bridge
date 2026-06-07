@@ -52,6 +52,40 @@ test("Zotero bridge serializer builds collection and item snapshot", async () =>
   assert.equal(snapshot.nativeNotes[1].parentItemKey, undefined);
 });
 
+test("Zotero bridge snapshot uses fast citation metadata by default", async () => {
+  const Zotero = fakeZotero();
+  let quickCopyCalls = 0;
+  (Zotero as any).QuickCopy = {
+    getContentFromItems: async (_items: unknown[], _format: string, _unused: unknown, asCitation: boolean) => {
+      quickCopyCalls += 1;
+      return { text: asCitation ? "(CSL, 2026)" : "CSL reference." };
+    }
+  };
+
+  const snapshot = await serializer.buildSnapshot(Zotero, { scope: "user" });
+
+  assert.equal(snapshot.citationMode, "fast");
+  assert.equal(quickCopyCalls, 0);
+  assert.equal(snapshot.items.find((item) => item.key === "I1")?.citation.apaInText, "(Smith, 2024)");
+});
+
+test("Zotero bridge snapshot can opt in to full CSL citation metadata", async () => {
+  const Zotero = fakeZotero();
+  let quickCopyCalls = 0;
+  (Zotero as any).QuickCopy = {
+    getContentFromItems: async (_items: unknown[], _format: string, _unused: unknown, asCitation: boolean) => {
+      quickCopyCalls += 1;
+      return { text: asCitation ? "(CSL, 2026)" : "CSL reference." };
+    }
+  };
+
+  const snapshot = await serializer.buildSnapshot(Zotero, { scope: "user", citationMode: "csl" });
+
+  assert.equal(snapshot.citationMode, "csl");
+  assert.equal(quickCopyCalls, 6);
+  assert.equal(snapshot.items.find((item) => item.key === "I1")?.citation.apaInText, "(CSL, 2026)");
+});
+
 test("Zotero bridge serializer builds citation response by citekey groups", async () => {
   const Zotero = fakeZotero();
   const response = await serializer.buildCitationResponse(Zotero, {
