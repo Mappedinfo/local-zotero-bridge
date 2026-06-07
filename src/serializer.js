@@ -254,6 +254,8 @@
 
   function generateReadableCitekey(item) {
     const year = getYear(item) || "NoDate";
+    const cjkAliases = generateCjkCitekeyAliases(item);
+    if (cjkAliases[0]) return cjkAliases[0];
     const author = getCreators(item).find((creator) => creator.creatorType === "author") || getCreators(item)[0];
     const titleTokens = significantTitleTokens(getField(item, "title") || "Untitled");
     const authorToken = author ? citekeyToken(creatorLastName(author)) : "";
@@ -267,7 +269,8 @@
   function generateReadableCitekeyAliases(item) {
     const compact = generateReadableCitekey(item);
     const expanded = generateExpandedTitleCitekey(item);
-    return unique([compact, lowerFirstCitekey(compact), expanded, lowerFirstCitekey(expanded)]).filter(Boolean);
+    const cjkAliases = generateCjkCitekeyAliases(item);
+    return unique([compact, lowerFirstCitekey(compact), expanded, lowerFirstCitekey(expanded), ...cjkAliases]).filter(Boolean);
   }
 
   function generateExpandedTitleCitekey(item) {
@@ -333,6 +336,69 @@
         .match(/[A-Za-z0-9]+/g) || []
     );
   }
+
+  function generateCjkCitekeyAliases(item) {
+    const year = getYear(item) || "NoDate";
+    const creators = getCreators(item);
+    const author = creators.find((creator) => creator.creatorType === "author") || creators[0];
+    const authorKey = cjkPinyinCitekeyToken(author ? creatorLastName(author) : "");
+    const titleKey = cjkPinyinCitekeyToken(getField(item, "title") || "");
+    const aliases = [];
+    if (authorKey && titleKey) aliases.push(`${authorKey}${titleKey}${year}`);
+    if (titleKey) aliases.push(`${titleKey}${year}`);
+    if (authorKey) aliases.push(`${authorKey}${year}`);
+    return unique(aliases.flatMap((alias) => [alias, legacyCjkCitekeyAlias(alias)]).filter(Boolean));
+  }
+
+  function legacyCjkCitekeyAlias(alias) {
+    return String(alias || "").includes("PingJia") ? String(alias).replace(/PingJia/g, "PingJie") : undefined;
+  }
+
+  function cjkPinyinCitekeyToken(value) {
+    const text = String(value || "");
+    if (!/[\u3400-\u9fff]/.test(text)) return "";
+    const parts = [];
+    for (const char of text) {
+      const pinyin = CJK_PINYIN[char];
+      if (pinyin) {
+        parts.push(pinyin);
+        continue;
+      }
+      if (/[A-Za-z0-9]/.test(char)) {
+        parts.push(citekeyToken(char));
+      }
+    }
+    return parts.join("");
+  }
+
+  const CJK_PINYIN = Object.freeze({
+    "中": "Zhong",
+    "华": "Hua",
+    "人": "Ren",
+    "民": "Min",
+    "共": "Gong",
+    "和": "He",
+    "国": "Guo",
+    "住": "Zhu",
+    "房": "Fang",
+    "城": "Cheng",
+    "乡": "Xiang",
+    "建": "Jian",
+    "设": "She",
+    "部": "Bu",
+    "项": "Xiang",
+    "目": "Mu",
+    "交": "Jiao",
+    "通": "Tong",
+    "影": "Ying",
+    "响": "Xiang",
+    "评": "Ping",
+    "价": "Jia",
+    "技": "Ji",
+    "术": "Shu",
+    "标": "Biao",
+    "准": "Zhun"
+  });
 
   async function buildItemCitationData(Zotero, item, options = {}) {
     const mode = normalizeCitationMode(options.mode || options.citationMode || "csl");

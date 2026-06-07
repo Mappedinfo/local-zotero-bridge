@@ -111,6 +111,33 @@ test("Zotero bridge serializer builds citation response by citekey groups", asyn
   assert.equal(response.entries.filter((entry) => entry.itemKey === "GJWEZCYB").length, 1);
 });
 
+test("Zotero bridge generates readable citekeys for CJK institutional items", async () => {
+  const Zotero = fakeZotero({ includeCjkStandard: true });
+  const key =
+    "ZhongHuaRenMinGongHeGuoZhuFangHeChengXiangJianSheBuJianSheXiangMuJiaoTongYingXiangPingJiaJiShuBiaoZhun2010";
+  const legacyKey =
+    "ZhongHuaRenMinGongHeGuoZhuFangHeChengXiangJianSheBuJianSheXiangMuJiaoTongYingXiangPingJieJiShuBiaoZhun2010";
+  const snapshot = await serializer.buildSnapshot(Zotero, { scope: "user" });
+  const item = snapshot.items.find((candidate) => candidate.key === "CGXJTT32")!;
+
+  assert.equal(item.citekey, key);
+  assert.notEqual(item.citekey, "2010");
+  assert.equal(item.citation.citekey, key);
+  assert.equal(item.citation.aliases?.includes("CGXJTT32"), true);
+  assert.equal(item.citation.aliases?.includes(legacyKey), true);
+  assert.match(item.citation.bibtex, new RegExp(`@article\\{${key}`));
+
+  const response = await serializer.buildCitationResponse(Zotero, {
+    scope: "user",
+    style: "apa",
+    groups: `${key}|${legacyKey}|CGXJTT32`
+  });
+  assert.equal(response.groups[0].missing.length, 0);
+  assert.equal(response.groups[1].missing.length, 0);
+  assert.equal(response.groups[2].missing.length, 0);
+  assert.equal(response.entries.find((entry) => entry.itemKey === "CGXJTT32")?.citekey, key);
+});
+
 test("Zotero bridge syncs one Obsidian-origin child note with conflict detection", async () => {
   const Zotero = fakeZotero();
   const firstMarkdown = "## Summary\nMine from Obsidian";
@@ -246,7 +273,7 @@ test("Zotero bridge package build includes the search panel script", () => {
   assert.match(buildScript, /src\/search-panel\.js/);
 });
 
-function fakeZotero() {
+function fakeZotero(options: { includeCjkStandard?: boolean } = {}) {
   let nextID = 200;
   const collections = [
     {
@@ -404,6 +431,30 @@ function fakeZotero() {
     childNote,
     standaloneNote
   ];
+
+  if (options.includeCjkStandard) {
+    items.unshift({
+      id: 4,
+      key: "CGXJTT32",
+      libraryID: 1,
+      itemType: "standard",
+      version: 1,
+      isRegularItem: () => true,
+      isNote: () => false,
+      getField: (field: string) =>
+        ({
+          title: "建设项目交通影响评价技术标准",
+          date: "2010",
+          publicationTitle: "中国建筑工业出版社",
+          extra: ""
+        })[field],
+      getCreators: () => [{ name: "中华人民共和国住房和城乡建设部", creatorType: "author" }],
+      getTags: () => [],
+      getCollections: () => ["C1"],
+      getAttachments: () => [],
+      getNotes: () => []
+    });
+  }
 
   return {
     version: "7.0",
