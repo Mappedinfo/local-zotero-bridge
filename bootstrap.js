@@ -3,9 +3,9 @@
 /* global ObsidianZoteroBridgeObsidian, IOUtils */
 
 const LOCAL_ZOTERO_BRIDGE_PLUGIN_ID = "local-zotero-bridge@mappedinfo.com";
-const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.16";
+const LOCAL_ZOTERO_BRIDGE_VERSION = "0.2.17";
 const BETTER_BIBTEX_ADDON_ID = "better-bibtex@iris-advies.com";
-const LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_TAG = "local-zotero-bridge-search-panel";
+const LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_RENDERER = "LocalZoteroBridgeSearchPanelRenderer";
 
 var ObsidianZoteroBridge = {
   endpoints: [
@@ -77,7 +77,7 @@ var ObsidianZoteroBridge = {
           error: this.searchUiError,
           renderError: this.searchUiRenderError,
           scriptLoaded: this.searchUiScriptLoaded,
-          customElementRegistered: this.isSearchPanelElementRegistered(),
+          rendererAvailable: this.isSearchPanelRendererAvailable(),
           bodyRendered: Boolean(this.searchPanel?.isConnected && this.searchPanel?.ready)
         },
         indexes: await this.getIndexDiagnostics(),
@@ -440,7 +440,7 @@ var ObsidianZoteroBridge = {
           icon,
           orderable: true
         },
-        bodyXHTML: `<${LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_TAG} />`,
+        bodyXHTML: this.searchPanelBodyXHTML(),
         onInit: ({ body }) => {
           this.attachSearchPanelController(body);
         },
@@ -503,33 +503,67 @@ var ObsidianZoteroBridge = {
     for (const win of windows) {
       this.loadSearchPanelScript(win);
     }
-    if (!windows.length || !this.isSearchPanelElementRegistered()) {
-      throw new Error("Could not register Obsidian search panel in Zotero main window");
+    if (!windows.length || !this.isSearchPanelRendererAvailable()) {
+      throw new Error("Could not load Obsidian search panel renderer in Zotero main window");
     }
+  },
+
+  searchPanelBodyXHTML() {
+    return `
+      <html:div
+        id="local-zotero-bridge-search-root"
+        style="display: flex; flex-direction: column; box-sizing: border-box; min-height: 260px; padding: 8px 12px 12px; color: var(--fill-primary, #222); font: 13px system-ui, -apple-system, BlinkMacSystemFont, sans-serif;"
+      >
+        <html:div
+          style="display: flex; gap: 6px; align-items: center; padding: 8px 0 10px; border-bottom: 1px solid var(--fill-quinary, #e0e0e0);"
+        >
+          <html:input
+            id="local-zotero-bridge-search-input"
+            type="search"
+            placeholder="搜索 Obsidian 笔记内容..."
+            style="flex: 1; width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--fill-quinary, #c8c8c8); border-radius: 6px; background: var(--material-background, #fff); color: inherit; font: inherit; min-height: 30px;"
+          ></html:input>
+          <html:button
+            id="local-zotero-bridge-search-run"
+            type="button"
+            style="min-height: 30px; padding: 4px 8px; border: 1px solid var(--fill-quinary, #c8c8c8); border-radius: 5px; background: var(--material-background, #fff); color: inherit; cursor: pointer; font: inherit;"
+          >搜索</html:button>
+        </html:div>
+        <html:div
+          id="local-zotero-bridge-search-status"
+          style="margin-top: 8px; min-height: 18px; color: var(--fill-secondary, #666); font-size: 12px;"
+        >输入关键词搜索所有同步的 Markdown notes。</html:div>
+        <html:div
+          id="local-zotero-bridge-search-results"
+          style="flex: 1; overflow: auto; padding: 8px 0 4px;"
+        ></html:div>
+      </html:div>
+    `;
   },
 
   loadSearchPanelScript(win) {
     if (!win) return;
-    if (!win.customElements?.get?.(LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_TAG)) {
+    if (!win[LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_RENDERER]) {
       Services.scriptloader.loadSubScript(`${this.rootURI}src/search-panel.js`, win);
     }
-    this.searchUiScriptLoaded = this.isSearchPanelElementRegistered();
+    this.searchUiScriptLoaded = this.isSearchPanelRendererAvailable();
   },
 
-  isSearchPanelElementRegistered() {
+  isSearchPanelRendererAvailable() {
     const windows = Zotero.getMainWindows?.() || [Zotero.getMainWindow?.()].filter(Boolean);
-    return windows.some((win) => Boolean(win?.customElements?.get?.(LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_TAG)));
+    return windows.some((win) => Boolean(win?.[LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_RENDERER]?.render));
   },
 
   attachSearchPanelController(body) {
-    const panel = body.querySelector(LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_TAG);
-    if (!panel) {
-      throw new Error("Obsidian search panel element was not created");
+    const win = body.ownerGlobal || body.ownerDocument?.defaultView || Zotero.getMainWindow?.();
+    if (!win?.[LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_RENDERER]?.render) {
+      this.loadSearchPanelScript(win);
     }
-    if (typeof panel.setController !== "function") {
-      throw new Error("Obsidian search panel script was not loaded in this Zotero window");
+    const renderer = win?.[LOCAL_ZOTERO_BRIDGE_SEARCH_PANEL_RENDERER];
+    if (!renderer?.render) {
+      throw new Error("Obsidian search panel renderer was not loaded in this Zotero window");
     }
-    panel.setController(this);
+    const panel = renderer.render(body, this);
     this.searchSectionBody = body;
     this.searchPanel = panel;
   },
