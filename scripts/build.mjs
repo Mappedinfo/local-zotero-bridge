@@ -17,6 +17,7 @@ for (const file of [
   "src/obsidian-note.js",
   "src/serializer.js",
   "src/obsidian.js",
+  "src/search-panel.js",
   "content/icons/local-zotero-bridge.svg",
   "locale/en-US/local-zotero-bridge.ftl",
   "locale/zh-CN/local-zotero-bridge.ftl"

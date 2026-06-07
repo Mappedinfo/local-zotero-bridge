@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import "../src/obsidian-note.js";
 import "../src/serializer.js";
@@ -158,6 +159,57 @@ test("Obsidian bridge helper builds URIs and searches indexed markdown", () => {
   assert.deepEqual(obsidian.searchMarkdownNote("alpha\nmethod evidence line\nbeta", "evidence"), [
     { line: 2, text: "method evidence line" }
   ]);
+});
+
+test("Obsidian bridge helper prefers plugin-state index paths before legacy synced index paths", () => {
+  const config = {
+    vaultPath: "/Vault",
+    targetFolder: "知识库/Zotero同步资料",
+    indexFileName: ".obsidian-zotero-index.json",
+    searchIndexFileName: ".obsidian-zotero-search-index.json",
+    pluginStateDirectory: ".obsidian/plugins/local-zotero-mirror",
+    internalIndexFileName: "zotero-index.json",
+    internalSearchIndexFileName: "zotero-search-index.json"
+  };
+
+  assert.deepEqual(obsidian.buildObsidianIndexPathCandidates(config), [
+    "/Vault/.obsidian/plugins/local-zotero-mirror/zotero-index.json",
+    "/Vault/知识库/Zotero同步资料/.obsidian-zotero-index.json"
+  ]);
+  assert.deepEqual(obsidian.buildObsidianSearchIndexPathCandidates(config), [
+    "/Vault/.obsidian/plugins/local-zotero-mirror/zotero-search-index.json",
+    "/Vault/知识库/Zotero同步资料/.obsidian-zotero-search-index.json"
+  ]);
+});
+
+test("Obsidian bridge helper searches plugin-state search index content", () => {
+  const index = {
+    schemaVersion: 1,
+    generatedAt: "2026-06-07T09:00:25.835Z",
+    targetFolder: "知识库/Zotero同步资料",
+    entries: [
+      {
+        kind: "paper",
+        path: "知识库/Zotero同步资料/Papers/1981 - Penchansky - The Concept of Access Definition and Relationship to Consumer Satisfaction.md",
+        title: "The concept of access: definition and relationship to consumer satisfaction",
+        citekey: "penchanskyConcept1981",
+        year: "1981",
+        itemKey: "DC9MFRV8",
+        zoteroUri: "zotero://select/library/items/DC9MFRV8",
+        updatedAt: "2026-06-07T09:00:25.835Z",
+        content: "title: The concept of access\nzotero/health-services-accessibility\nPenchansky access note"
+      }
+    ]
+  };
+
+  const results = obsidian.searchLibraryIndex(index, "Penchansky access", 5);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].itemKey, "DC9MFRV8");
+});
+
+test("Zotero bridge package build includes the search panel script", () => {
+  const buildScript = readFileSync(new URL("../scripts/build.mjs", import.meta.url), "utf8");
+  assert.match(buildScript, /src\/search-panel\.js/);
 });
 
 function fakeZotero() {

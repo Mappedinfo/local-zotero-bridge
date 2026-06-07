@@ -6,6 +6,9 @@
     papersFolderName: "Papers",
     indexFileName: ".obsidian-zotero-index.json",
     searchIndexFileName: ".obsidian-zotero-search-index.json",
+    pluginStateDirectory: ".obsidian/plugins/local-zotero-mirror",
+    internalIndexFileName: "zotero-index.json",
+    internalSearchIndexFileName: "zotero-search-index.json",
     filenameTemplate: "{year} - {firstAuthor} - {title}"
   };
 
@@ -46,6 +49,22 @@
     const resolved = resolveConfig(config);
     const fileName = `${sanitizePathSegment(renderFilenameTemplate(resolved.filenameTemplate, item))}.md`;
     return normalizeVaultPath([resolved.targetFolder, resolved.papersFolderName, fileName].join("/"));
+  }
+
+  function buildObsidianIndexPathCandidates(config) {
+    const resolved = resolveConfig(config);
+    return [
+      joinFsPath(resolved.vaultPath, resolved.pluginStateDirectory, resolved.internalIndexFileName),
+      joinFsPath(resolved.vaultPath, resolved.targetFolder, resolved.indexFileName)
+    ];
+  }
+
+  function buildObsidianSearchIndexPathCandidates(config) {
+    const resolved = resolveConfig(config);
+    return [
+      joinFsPath(resolved.vaultPath, resolved.pluginStateDirectory, resolved.internalSearchIndexFileName),
+      joinFsPath(resolved.vaultPath, resolved.targetFolder, resolved.searchIndexFileName)
+    ];
   }
 
   function buildNewNoteContent(item, now = new Date().toISOString()) {
@@ -235,6 +254,13 @@
     return Number.isFinite(parsed) && parsed > 0 ? Math.min(Math.floor(parsed), 200) : 50;
   }
 
+  function joinFsPath(...parts) {
+    return parts
+      .filter(Boolean)
+      .join("/")
+      .replace(/\/+/g, "/");
+  }
+
   function resolveConfig(config) {
     return {
       ...DEFAULT_OBSIDIAN_CONFIG,
@@ -244,6 +270,8 @@
 
   const api = {
     DEFAULT_OBSIDIAN_CONFIG,
+    buildObsidianIndexPathCandidates,
+    buildObsidianSearchIndexPathCandidates,
     buildFallbackPaperPath,
     buildNewNoteContent,
     buildObsidianNewUri,
